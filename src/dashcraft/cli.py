@@ -180,9 +180,6 @@ def _cmd_pack(args: argparse.Namespace) -> int:
 
     print('\nCharm generation complete.', file=sys.stderr)
 
-    _cleanup_tmp(tmp_dir, args.keep_source)
-    return 0
-
     # Step 6: Pack (unreachable for now — future work)
     print('Packing charm...')
     pack_ret = _run_quickpack(charm_dir)
