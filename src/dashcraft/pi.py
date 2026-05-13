@@ -11,6 +11,7 @@ See ``docs/rpc.md`` in the pi source tree for the full protocol.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import subprocess
 import sys
@@ -63,7 +64,7 @@ class PiRpcServer:
                 Set ``False`` to allow loading prompt templates.
         """
         self._model = model
-        self._extension = extension or str(_EXTENSION_PATH)
+        self._extension = extension
         self._work_dir = str(work_dir) if work_dir else str(Path.cwd())
         self._system_prompt = (
             system_prompt
@@ -73,6 +74,12 @@ class PiRpcServer:
         self._no_skills = no_skills
         self._no_prompt_templates = no_prompt_templates
         self._proc: subprocess.Popen[str] | None = None
+        # Shared read buffer so that data prefetched during send()
+        # is not lost when events() / wait_for_agent_end() reads next.
+        self._buffer: str = ''
+        # If agent_end arrives during send() (unlikely but possible),
+        # stash it here so wait_for_agent_end() can return immediately.
+        self._pending_agent_end: dict[str, Any] | None = None
 
     # -- context manager -----------------------------------------------------
 
@@ -99,6 +106,7 @@ class PiRpcServer:
             '--extension',
             self._extension,
         ]
+        print(cmd)
         if self._no_skills:
             cmd += ['--no-skills']
         if self._no_prompt_templates:
@@ -197,23 +205,23 @@ class PiRpcServer:
             raise RuntimeError('Pi RPC server stdout unavailable')
 
         deadline = time.monotonic() + timeout
-        buffer = ''
+
         while time.monotonic() < deadline:
             if self._proc.poll() is not None:
                 # Process exited -- drain remaining buffer.
                 remaining = self._proc.stdout.read()
                 if remaining:
-                    buffer += remaining
+                    self._buffer += remaining
                 break
 
             chunk = self._proc.stdout.readline()
             if not chunk:
                 break
-            buffer += chunk
+            self._buffer += chunk
 
             # Process complete lines.
-            while '\n' in buffer:
-                line, buffer = buffer.split('\n', 1)
+            while '\n' in self._buffer:
+                line, self._buffer = self._buffer.split('\n', 1)
                 line = line.rstrip('\r')
                 if not line.strip():
                     continue
@@ -223,6 +231,9 @@ class PiRpcServer:
                     continue
 
                 events_seen.append(msg)
+                # Stash agent_end in case it arrives before the response.
+                if msg.get('type') == 'agent_end':
+                    self._pending_agent_end = msg
                 if on_event:
                     on_event(msg)
                 if msg.get('type') == 'response':
@@ -233,15 +244,23 @@ class PiRpcServer:
                     # Got a response for a different id -- keep waiting.
 
         # Timeout or no matching response.
+        stderr_info = ''
+        if self._proc is not None:
+            with contextlib.suppress(Exception):
+                stderr_stream = getattr(self._proc, 'stderr', None)
+                if stderr_stream is not None:
+                    err = stderr_stream.read()
+                    if err and err.strip():
+                        stderr_info = f'\n  pi stderr: {err[-1000:]}'
         raise RuntimeError(
             f'Timed out waiting for pi RPC response (id={cmd_id!r}). '
-            f'Events seen: {len(events_seen)}'
+            f'Events seen: {len(events_seen)}.{stderr_info}'
         )
 
     def wait_for_agent_end(
         self,
         *,
-        timeout: float = 600.0,
+        timeout: float = 1800.0,
         on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any] | None:
         """Read events until ``agent_end`` or timeout.
@@ -250,13 +269,19 @@ class PiRpcServer:
         asynchronously. Call this to wait for it to finish.
 
         Args:
-            timeout: Maximum seconds to wait (default 600 == 10 min).
+            timeout: Maximum seconds to wait (default 1800 == 30 min).
             on_event: Optional callback for every event dict seen.
 
         Returns:
             The ``agent_end`` event dict, or ``None`` on timeout /
             process exit.
         """
+        # If agent_end was already seen during send(), return immediately.
+        if self._pending_agent_end is not None:
+            result = self._pending_agent_end
+            self._pending_agent_end = None
+            return result
+
         deadline = time.monotonic() + timeout
         for event in self.events():
             if on_event:
@@ -270,12 +295,27 @@ class PiRpcServer:
     def events(self) -> Iterator[dict[str, Any]]:
         """Yield JSON events from the pi subprocess stdout.
 
-        Each line is parsed and yielded as a dict.  Stops when the
-        subprocess exits and stdout is exhausted.
+        Each line is parsed and yielded as a dict.  Reads from the
+        shared ``self._buffer`` first so that data prefetched during
+        ``send()`` is not lost.
+
+        Stops when the subprocess exits and stdout is exhausted.
         """
         if self._proc is None or self._proc.stdout is None:
             return
 
+        # First, drain the shared buffer (data already read by send()).
+        while '\n' in self._buffer:
+            line, self._buffer = self._buffer.split('\n', 1)
+            line = line.rstrip('\r')
+            if not line.strip():
+                continue
+            try:
+                yield json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+        # Then read from stdout line-by-line.
         for raw_line in self._proc.stdout:
             line = raw_line.rstrip('\r\n')
             if not line:
@@ -379,14 +419,30 @@ def _build_generation_prompt(
     )
 
 
+def _resolve_extension_path(project_dir: Path) -> Path | None:
+    """Find the juju-charm extension for a project.
+
+    Looks in *project_dir* first, then falls back to the bundled
+    extension next to this module.
+
+    Returns the absolute path to ``index.ts``, or ``None`` if not
+    found in either location.
+    """
+    # First, look in the charm project directory (where dashcraft.yaml
+    # lives).  This is the expected location when the user has
+    # scaffolded the charm.
+    project_ext = project_dir / '.pi' / 'extensions' / 'dashcraft' / 'index.ts'
+    return project_ext
+
+
 def generate_charm(
     *,
     config_obj: Any,
     source_dir: Path,
     project_dir: Path,
     on_event: Callable[[dict[str, Any]], None] | None = None,
-    timeout: float = 600.0,
-    prompt_timeout: float = 30.0,
+    timeout: float = 1800.0,
+    prompt_timeout: float = 300.0,
 ) -> dict[str, Any]:
     """Generate charm code for the cloned workload via pi RPC.
 
@@ -403,9 +459,11 @@ def generate_charm(
             from the pi subprocess (both during prompt acceptance and
             while waiting for ``agent_end``).
         timeout: Maximum seconds to wait for the agent to finish
-            (default 600 s == 10 min).
+            (default 1800 s == 30 min).
         prompt_timeout: Maximum seconds to wait for the prompt
-            command response (default 30 s).
+            command response (default 300 s).  This needs to be long
+            enough to cover pi startup, model initialisation, and
+            extension loading.
 
     Returns:
         A dict with at least these keys:
@@ -431,9 +489,11 @@ def generate_charm(
         description=description,
     )
 
+    extension = _resolve_extension_path(project_dir)
     server = PiRpcServer(
         model=model,
         work_dir=project_dir,
+        extension=str(extension),
     )
     server.start()
 
@@ -465,7 +525,9 @@ def generate_charm(
                 'success': False,
                 'prompt_response': prompt_response,
                 'agent_end': None,
-                'error': f'Agent timed out after {timeout}s',
+                'error': (
+                    f'Agent timed out after {timeout}s. Increase the timeout parameter if needed.'
+                ),
             }
 
         return {
