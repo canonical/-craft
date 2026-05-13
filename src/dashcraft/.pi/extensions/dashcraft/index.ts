@@ -564,20 +564,19 @@ export default function (pi: ExtensionAPI) {
     name: "dashcraft",
     label: "dashcraft",
     description:
-      "Initialize or update a Juju charm project — charming, but fast. " +
-      "Requires a charm directory (with basic scaffolding like charmcraft.yaml) " +
-      "and a path to a cloned workload. The tool researches the workload and " +
-      "writes charmcraft.yaml and src/charm.py with appropriate values. " +
-      "If the charm directory is empty, basic scaffolding is created first.",
-    promptSnippet: "dashcraft: research a cloned workload and write a Juju charm (charmcraft.yaml + src/charm.py)",
+      "Initialize a Juju charm project from a cloned workload — charming, but fast. " +
+      "Researches the workload and writes charmcraft.yaml and src/charm.py. " +
+      "By default this tool REFUSES to overwrite existing charmcraft.yaml or " +
+      "src/charm.py — pass force=true to overwrite. " +
+      "Note: when run via `dashcraft pack`, the CLI already pre-fills these " +
+      "files server-side, so this tool is usually unnecessary in the AI loop.",
+    promptSnippet: "dashcraft: scaffold a Juju charm from a cloned workload source (only if files aren't already filled)",
     promptGuidelines: [
-      "Use dashcraft when the user asks to create a new Juju charm, initialize a charm project, or scaffold a charm.",
-      "Before calling dashcraft, read /skill:quick-charm-workflow to determine the appropriate charm path (custom, 12-factor, infrastructure).",
-      "dashcraft needs TWO arguments: directory (path to charm project) and workload (path to cloned workload source). Both are required.",
-      "The workload should already be cloned to disk before calling dashcraft. Use git clone if needed.",
-      "After dashcraft writes charmcraft.yaml and src/charm.py, review them with the user.",
-      "Then load /skill:relations, /skill:operational-patterns, and /skill:observability to flesh out the charm further.",
-      "After the charm is ready, use charm_build to pack it.",
+      "Use dashcraft ONLY when the charm directory has no charmcraft.yaml yet (interactive scaffolding flow).",
+      "When invoked from `dashcraft pack`, do NOT call this tool — the CLI has already filled charmcraft.yaml and src/charm.py from a deterministic analysis. Calling dashcraft would either be a no-op or require force=true.",
+      "dashcraft needs two arguments: directory (charm project root) and workload (cloned upstream source). Both are required.",
+      "If the workload isn't cloned yet, use git clone first.",
+      "After scaffolding (or skipping), run charm_lint and charm_test_unit. Only consult /skill:relations, /skill:operational-patterns etc. once tests pass.",
     ],
     parameters: Type.Object({
       directory: Type.String({
@@ -591,6 +590,13 @@ export default function (pi: ExtensionAPI) {
           "The tool reads this directory to detect the language, framework, startup command, ports, and configuration. " +
           "Clone with: git clone <url> /tmp/workload",
       }),
+      force: Type.Optional(
+        Type.Boolean({
+          description:
+            "Overwrite an existing charmcraft.yaml or src/charm.py. Defaults to false; " +
+            "without it the tool refuses to clobber pre-filled files.",
+        }),
+      ),
     }),
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const charmDir = path.resolve(ctx.cwd, params.directory.trim());
@@ -628,13 +634,34 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      // Phase 1: Scaffold skeleton if needed
+      // Refuse to clobber pre-filled files unless force=true.
+      const existingCharmPy = path.join(charmDir, "src", "charm.py");
+      const yamlPresent = fs.existsSync(existingYaml);
+      const charmPyPresent = fs.existsSync(existingCharmPy);
+      const force = params.force === true;
+      if ((yamlPresent || charmPyPresent) && !force) {
+        const present: string[] = [];
+        if (yamlPresent) present.push("charmcraft.yaml");
+        if (charmPyPresent) present.push("src/charm.py");
+        return {
+          content: [{
+            type: "text",
+            text:
+              `${present.join(" and ")} already exist in ${params.directory}. ` +
+              "Skipping. If you really want to regenerate from workload analysis, " +
+              "call dashcraft again with force=true.\n\n" +
+              "Otherwise, proceed with charm_lint and charm_test_unit on the existing files.",
+          }],
+          details: { skipped: present, directory: params.directory, force: false },
+        };
+      }
+
       onUpdate?.({ content: [{ type: "text", text: "Checking charm directory..." }] });
       fs.mkdirSync(charmDir, { recursive: true });
 
       let created: string[] = [];
       let skipped: string[] = [];
-      if (!fs.existsSync(existingYaml)) {
+      if (!yamlPresent) {
         // Charm directory is empty — scaffold skeleton first
         onUpdate?.({ content: [{ type: "text", text: "Scaffolding skeleton charm files..." }] });
         const result = scaffoldCharm(charmName, charmDir, true);
@@ -642,13 +669,11 @@ export default function (pi: ExtensionAPI) {
         skipped = result.skipped;
       }
 
-      // Phase 2: Research workload
       onUpdate?.({ content: [{ type: "text", text: "Researching workload (reading source files, Dockerfiles, configs)..." }] });
       if (signal?.aborted) return { content: [{ type: "text", text: "Cancelled." }], details: {} };
 
       const analysis = analyseWorkload(workloadDir, charmName);
 
-      // Phase 3: Write filled charmcraft.yaml and src/charm.py
       onUpdate?.({ content: [{ type: "text", text: "Writing charmcraft.yaml and src/charm.py from analysis..." }] });
 
       const ctxTmpl = makeContext(charmName);
@@ -657,17 +682,14 @@ export default function (pi: ExtensionAPI) {
       for (const [relPath, content] of files) {
         const fullPath = path.join(charmDir, relPath);
         if (relPath === "charmcraft.yaml" || relPath === "src/charm.py") {
-          // Always overwrite these two
           writeFile(fullPath, content);
           written++;
         } else if (!fs.existsSync(fullPath)) {
-          // Write other scaffold files only if missing
           writeFile(fullPath, content);
           written++;
         }
       }
 
-      // Build result message
       let msg = `Charm "${charmName}" initialized from workload analysis.\n\n`;
       msg += `**Detected:**\n`;
       msg += `- Name: ${analysis.name}\n`;
@@ -679,18 +701,20 @@ export default function (pi: ExtensionAPI) {
         msg += `- Env vars detected: ${Object.keys(analysis.envVars).join(", ")}\n`;
       }
       msg += `\n**Files written:** ${written} (including charmcraft.yaml, src/charm.py)\n`;
-      msg += `\n**Next steps:**\n`;
+      // Order matches the agent's one-shot prompt: validate first, then
+      // consult skills only if a deeper feature (relations, observability,
+      // etc.) needs to be added.
+      msg += `\n**Next steps (in order):**\n`;
       msg += `1. Review \`charmcraft.yaml\` and \`src/charm.py\` in \`${params.directory}\`\n`;
-      msg += `2. Load /skill:relations if the workload needs database, ingress, or other relations\n`;
-      msg += `3. Load /skill:observability for COS integration (metrics, logs, dashboards)\n`;
-      msg += `4. Load /skill:operational-patterns for actions, config validation, and status handling\n`;
-      msg += `5. Run \`charm_lint\` to check code quality\n`;
-      msg += `6. Run \`charm_test_unit\` to run unit tests\n`;
-      msg += `7. Run \`charm_build\` to pack the charm\n`;
+      msg += `2. Run \`charm_lint\` and fix any failures\n`;
+      msg += `3. Run \`charm_test_unit\` and fix any failures\n`;
+      msg += `4. If the workload needs deeper relation/observability work, load /skill:relations, /skill:operational-patterns or /skill:observability and apply patterns\n`;
+      msg += `5. Re-run \`charm_lint\` and \`charm_test_unit\` to confirm\n`;
+      msg += `6. Run \`charm_build\` to pack the charm\n`;
 
       return {
         content: [{ type: "text", text: msg }],
-        details: { charmName, directory: params.directory, workload: params.workload, analysis, created, skipped, written },
+        details: { charmName, directory: params.directory, workload: params.workload, analysis, created, skipped, written, force },
       };
     },
 

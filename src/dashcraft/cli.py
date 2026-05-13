@@ -182,6 +182,7 @@ def _cmd_pack(args: argparse.Namespace) -> int:
             config_obj=config,
             source_dir=source_dir,
             project_dir=charm_dir,
+            analysis=analysis,
             on_event=_pi_event_handler,
         )
     except RuntimeError as e:

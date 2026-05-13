@@ -20,6 +20,8 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
+from dashcraft.analysis import WorkloadAnalysis
+
 # ---------------------------------------------------------------------------
 # Low-level subprocess manager
 # ---------------------------------------------------------------------------
@@ -340,6 +342,32 @@ def _default_model_for_config(config_obj: Any) -> str:
     return _DEFAULT_MODEL
 
 
+_MAX_FIX_ITERATIONS = 5
+
+
+def _format_analysis_block(analysis: WorkloadAnalysis) -> str:
+    """Render a compact, agent-readable summary of the workload analysis."""
+    lines = [
+        f'- name: {analysis.name}',
+        f'- language: {analysis.language}',
+    ]
+    if analysis.framework != 'none':
+        lines.append(f'- framework: {analysis.framework}')
+    if analysis.command:
+        lines.append(f'- command: {analysis.command}')
+    if analysis.port:
+        lines.append(f'- port: {analysis.port}')
+    if analysis.env_vars:
+        lines.append(f'- env vars: {", ".join(sorted(analysis.env_vars))}')
+    if analysis.is_web_app:
+        lines.append('- web app: yes')
+    if analysis.needs_database:
+        lines.append('- needs database: yes')
+    if analysis.has_dockerfile:
+        lines.append('- Dockerfile: yes')
+    return '\n'.join(lines)
+
+
 def _build_generation_prompt(
     *,
     charm_dir: Path,
@@ -347,8 +375,13 @@ def _build_generation_prompt(
     charm_name: str,
     summary: str = '',
     description: str = '',
+    analysis: WorkloadAnalysis | None = None,
 ) -> str:
-    """Build the multi-phase prompt for the pi agent.
+    """Build the one-shot prompt for the pi agent.
+
+    The CLI has already analysed the workload and written filled
+    ``charmcraft.yaml`` and ``src/charm.py`` into *charm_dir*. The agent's
+    job is to polish and validate those files, not to re-do the research.
 
     Args:
         charm_dir: Path to the scaffolded charm project.
@@ -356,59 +389,57 @@ def _build_generation_prompt(
         charm_name: Name of the charm (from config).
         summary: Short summary from the config (may be empty).
         description: Longer description from the config (may be empty).
-
-    Returns:
-        The prompt string to send via the pi RPC ``prompt`` command.
+        analysis: Pre-computed workload analysis. When provided, its
+            details are inlined into the prompt so the agent does not
+            need to re-research the workload.
     """
-    # Build context header from config metadata.
-    context_parts = [f'Charm name: {charm_name}']
+    header_lines = [f'Charm name: {charm_name}']
     if summary:
-        context_parts.append(f'Summary: {summary}')
+        header_lines.append(f'Summary: {summary}')
     if description:
-        context_parts.append(f'Description: {description}')
-    context_header = '\n'.join(context_parts)
+        header_lines.append(f'Description: {description}')
+    header_lines.append(f'Charm directory: {charm_dir}')
+    header_lines.append(f'Workload source: {workload_dir}')
+    header = '\n'.join(header_lines)
+
+    analysis_block = _format_analysis_block(analysis) if analysis else '(no analysis available)'
 
     return (
-        f'You are going to build a Juju charm for a workload. Do everything in one shot '
-        f'— do NOT stop and ask questions, just keep going until the charm is ready.\n'
-        f'\n'
-        f'## Project context\n'
-        f'{context_header}\n'
-        f'Charm directory: {charm_dir}\n'
-        f'Workload source: {workload_dir}\n'
-        f'\n'
-        f'## Phase 1: Initial research\n'
-        f'Call the dashcraft tool with:\n'
-        f'  directory={charm_dir}\n'
-        f'  workload={workload_dir}\n'
-        f'\n'
-        f'## Phase 2: Fix structural issues\n'
-        f'Read the generated charmcraft.yaml and src/charm.py. Fix any structural problems:\n'
-        f'- Malformed YAML or dict nesting\n'
-        f'- Placeholder commands (/bin/foo)\n'
-        f'- Missing module files\n'
-        f'- Incorrect container/resource names\n'
-        f"- Anything that won't work\n"
-        f'\n'
-        f'## Phase 3: Lint and fix\n'
-        f'Run charm_lint on {charm_dir}. If it fails, fix the issues and re-run '
-        f'until lint passes cleanly.\n'
-        f'\n'
-        f'## Phase 4: Unit tests and fix\n'
-        f'Run charm_test_unit on {charm_dir}. If it fails, fix the issues and re-run '
-        f'until unit tests pass cleanly.\n'
-        f'\n'
-        f'## Phase 5: Load skills for quality\n'
-        f'Load /skill:relations if the workload has database/integration needs, '
-        f'/skill:observability for COS integration, and '
-        f'/skill:operational-patterns for actions/config/status patterns. '
-        f'Apply the relevant patterns.\n'
-        f'\n'
-        f'## Phase 6: Final validation\n'
-        f'Run charm_lint AND charm_test_unit one last time to confirm everything passes.\n'
-        f'\n'
-        f'IMPORTANT: Do NOT stop between phases. Do NOT ask the user for permission. '
-        f'Just go through all phases in one continuous run.'
+        'You are polishing a Juju charm. The upstream workload is already cloned and '
+        '`charmcraft.yaml` + `src/charm.py` are pre-filled from a deterministic '
+        'workload analysis. Do everything in one shot — do NOT stop or ask questions.\n'
+        '\n'
+        '## Project context\n'
+        f'{header}\n'
+        '\n'
+        '## Workload analysis (already applied to the scaffold)\n'
+        f'{analysis_block}\n'
+        '\n'
+        '## What is already done — do NOT redo\n'
+        f'- Upstream is cloned at {workload_dir}.\n'
+        f'- charmcraft.yaml and src/charm.py at {charm_dir} are pre-filled from the\n'
+        '  analysis above. Do NOT call the dashcraft tool; the files are ready.\n'
+        '\n'
+        '## Tasks (do in order, no questions)\n'
+        f'1. Quickly read {charm_dir}/charmcraft.yaml and src/charm.py. Edit only if\n'
+        '   something is obviously wrong for this workload (e.g. the command is a\n'
+        '   placeholder, an env var maps to the wrong config key). Otherwise leave\n'
+        '   them alone.\n'
+        f'2. Run charm_lint. If it fails, fix and re-run, '
+        f'up to {_MAX_FIX_ITERATIONS} attempts.\n'
+        f'3. Run charm_test_unit. If it fails, fix and re-run, '
+        f'up to {_MAX_FIX_ITERATIONS} attempts.\n'
+        '4. If the workload uses a database / cache / ingress, load /skill:relations\n'
+        '   and /skill:operational-patterns and apply the relevant patterns. Re-run\n'
+        '   charm_lint and charm_test_unit after the changes.\n'
+        '5. Final pass: charm_lint AND charm_test_unit must both pass.\n'
+        '\n'
+        '## Hard rules\n'
+        '- Do NOT ask the user for permission or input.\n'
+        f'- If lint or unit tests fail more than {_MAX_FIX_ITERATIONS} times, stop trying\n'
+        '  to fix; write a one-paragraph KNOWN_ISSUES.md describing what remains, then\n'
+        '  finish with whatever passes.\n'
+        '- Do NOT call the `dashcraft` tool — files are already filled.\n'
     )
 
 
@@ -436,6 +467,7 @@ def generate_charm(
     config_obj: Any,
     source_dir: Path,
     project_dir: Path,
+    analysis: WorkloadAnalysis | None = None,
     on_event: Callable[[dict[str, Any]], None] | None = None,
     timeout: float = 1800.0,
     prompt_timeout: float = 300.0,
@@ -451,6 +483,9 @@ def generate_charm(
         config_obj: A parsed :class:`~.Config` from ``dashcraft.yaml``.
         source_dir: Path to the cloned upstream workload source tree.
         project_dir: Path to the scaffolded charm project root.
+        analysis: Optional pre-computed workload analysis. When provided,
+            its details are embedded in the prompt so the agent does
+            not need to re-research the workload.
         on_event: Optional callback invoked for every event received
             from the pi subprocess (both during prompt acceptance and
             while waiting for ``agent_end``).
@@ -483,6 +518,7 @@ def generate_charm(
         charm_name=charm_name,
         summary=summary,
         description=description,
+        analysis=analysis,
     )
 
     extension = _resolve_extension_path(project_dir)

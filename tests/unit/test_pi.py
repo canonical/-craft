@@ -281,28 +281,75 @@ class TestBuildGenerationPrompt:
         assert 'Summary:' not in prompt
         assert 'Description:' not in prompt
 
-    def test_includes_phase_structure(self, tmp_path: Path) -> None:
+    def test_includes_task_list_and_paths(self, tmp_path: Path) -> None:
         prompt = _build_generation_prompt(
             charm_dir=tmp_path / 'charm',
             workload_dir=tmp_path / 'source',
             charm_name='test',
         )
-        assert 'Phase 1: Initial research' in prompt
-        assert 'Phase 2: Fix structural issues' in prompt
-        assert 'Phase 3: Lint and fix' in prompt
-        assert 'Phase 4: Unit tests and fix' in prompt
-        assert 'Phase 5: Load skills for quality' in prompt
-        assert 'Phase 6: Final validation' in prompt
-
-    def test_includes_dashcraft_tool_call(self, tmp_path: Path) -> None:
-        prompt = _build_generation_prompt(
-            charm_dir=tmp_path / 'charm',
-            workload_dir=tmp_path / 'source',
-            charm_name='test',
-        )
-        assert 'dashcraft tool' in prompt
+        # Numbered task list (no more multi-phase numbering).
+        assert '1.' in prompt
+        assert '2.' in prompt
+        assert 'charm_lint' in prompt
+        assert 'charm_test_unit' in prompt
+        # Both directories must be referenced.
         assert str(tmp_path / 'charm') in prompt
         assert str(tmp_path / 'source') in prompt
+
+    def test_tells_agent_not_to_call_dashcraft_tool(self, tmp_path: Path) -> None:
+        """The prompt now says files are pre-filled; the agent must not redo them."""
+        prompt = _build_generation_prompt(
+            charm_dir=tmp_path / 'charm',
+            workload_dir=tmp_path / 'source',
+            charm_name='test',
+        )
+        assert (
+            'Do NOT call the dashcraft tool' in prompt or 'do NOT call the `dashcraft`' in prompt
+        )
+
+    def test_has_termination_cap(self, tmp_path: Path) -> None:
+        """Lint/test fix loops must have a hard cap to prevent timeout-burn."""
+        prompt = _build_generation_prompt(
+            charm_dir=tmp_path / 'charm',
+            workload_dir=tmp_path / 'source',
+            charm_name='test',
+        )
+        # We don't pin the exact number; just that there is a cap on iterations.
+        assert 'attempts' in prompt or 'iterations' in prompt
+        assert 'KNOWN_ISSUES' in prompt  # the escape-hatch artefact
+
+    def test_includes_analysis_when_provided(self, tmp_path: Path) -> None:
+        from dashcraft.analysis import WorkloadAnalysis
+
+        analysis = WorkloadAnalysis(
+            name='my-svc',
+            language='python',
+            framework='flask',
+            command='flask run',
+            port=5000,
+            is_web_app=True,
+        )
+        prompt = _build_generation_prompt(
+            charm_dir=tmp_path / 'charm',
+            workload_dir=tmp_path / 'source',
+            charm_name='my-svc',
+            analysis=analysis,
+        )
+        assert 'language: python' in prompt
+        assert 'framework: flask' in prompt
+        assert 'command: flask run' in prompt
+        assert 'port: 5000' in prompt
+        assert 'web app: yes' in prompt
+
+    def test_no_analysis_falls_back_gracefully(self, tmp_path: Path) -> None:
+        prompt = _build_generation_prompt(
+            charm_dir=tmp_path / 'charm',
+            workload_dir=tmp_path / 'source',
+            charm_name='test',
+            analysis=None,
+        )
+        # Just confirms it doesn't crash and produces something.
+        assert 'no analysis available' in prompt
 
 
 def test_default_model_for_config_uses_set_model() -> None:
