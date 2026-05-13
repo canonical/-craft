@@ -80,13 +80,43 @@ def main(argv: list[str] | None = None) -> NoReturn:
     if args.pi_args:
         pi_cmd += args.pi_args.split()
 
-    # The prompt — ask the LLM to research the workload then call dashcraft
+    # The prompt — one-shot: dashcraft → fix → lint → unit → iterate until clean
     prompt = (
+        f'You are going to build a Juju charm for a workload. Do everything in one shot '
+        f'— do NOT stop and ask questions, just keep going until the charm is ready.\n'
+        f'\n'
+        f'## Phase 1: Initial research\n'
         f'Call the dashcraft tool with:\n'
         f'  directory={charm_dir}\n'
-        f'  workload={workload_dir}\n\n'
-        f'Do NOT read the workload yourself first — the dashcraft tool handles all the research.\n'
-        f'Just call dashcraft with those two arguments.'
+        f'  workload={workload_dir}\n'
+        f'\n'
+        f'## Phase 2: Fix structural issues\n'
+        f'Read the generated charmcraft.yaml and src/charm.py. Fix any structural problems:\n'
+        f'- Malformed YAML or dict nesting\n'
+        f'- Placeholder commands ({"/bin/foo"})\n'
+        f'- Missing module files\n'
+        f'- Incorrect container/resource names\n'
+        f"- Anything that won't work\n"
+        f'\n'
+        f'## Phase 3: Lint and fix\n'
+        f'Run charm_lint on {charm_dir}. If it fails, fix the issues and re-run '
+        f'until lint passes cleanly.\n'
+        f'\n'
+        f'## Phase 4: Unit tests and fix\n'
+        f'Run charm_test_unit on {charm_dir}. If it fails, fix the issues and re-run '
+        f'until unit tests pass cleanly.\n'
+        f'\n'
+        f'## Phase 5: Load skills for quality\n'
+        f'Load /skill:relations if the workload has database/integration needs, '
+        f'/skill:observability for COS integration, and '
+        f'/skill:operational-patterns for actions/config/status patterns. '
+        f'Apply the relevant patterns.\n'
+        f'\n'
+        f'## Phase 6: Final validation\n'
+        f'Run charm_lint AND charm_test_unit one last time to confirm everything passes.\n'
+        f'\n'
+        f'IMPORTANT: Do NOT stop between phases. Do NOT ask the user for permission. '
+        f'Just go through all phases in one continuous run.'
     )
 
     print(f'[dashcraft-rpc] Starting: {" ".join(pi_cmd)}', file=sys.stderr)
@@ -209,6 +239,42 @@ def main(argv: list[str] | None = None) -> NoReturn:
         stderr_text = proc.stderr.read()  # type: ignore[union-attr]
         if stderr_text.strip():
             print(f'\n[dashcraft-rpc] pi stderr:\n{stderr_text}', file=sys.stderr)
+
+    # ── Independent final check ────────────────────────────────────────
+    print('\n[dashcraft-rpc] ── Final validation ──', file=sys.stderr)
+
+    def _run_check(cmd: list[str]) -> tuple[int, str]:
+        try:
+            r = subprocess.run(cmd, cwd=charm_dir, capture_output=True, text=True, timeout=120)
+            return r.returncode, (r.stdout + r.stderr).strip()
+        except FileNotFoundError:
+            return -1, f'{cmd[0]} not found'
+        except subprocess.TimeoutExpired:
+            return -1, 'timed out'
+
+    lint_code, lint_out = _run_check(['tox', 'run', '-e', 'lint'])
+    unit_code, unit_out = _run_check(['tox', 'run', '-e', 'unit'])
+
+    def _status(code: int) -> str:
+        return '✓' if code == 0 else '✗'
+
+    print(f'  charm_lint  {_status(lint_code)} (exit {lint_code})', file=sys.stderr)
+    print(f'  charm_unit  {_status(unit_code)} (exit {unit_code})', file=sys.stderr)
+
+    if lint_code != 0:
+        print(f'\n[dashcraft-rpc] Lint output:\n{lint_out[-2000:]}', file=sys.stderr)
+    if unit_code != 0:
+        print(f'\n[dashcraft-rpc] Unit output:\n{unit_out[-2000:]}', file=sys.stderr)
+
+    if lint_code == 0 and unit_code == 0:
+        print('[dashcraft-rpc] ✓ Charm is ready!', file=sys.stderr)
+        exit_code = 0
+    else:
+        print(
+            '[dashcraft-rpc] ✗ Charm still has issues — run again for another cleanup pass.',
+            file=sys.stderr,
+        )
+        exit_code = 1
 
     sys.exit(exit_code)
 
