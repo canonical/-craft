@@ -14,8 +14,6 @@ from dashcraft.templates import get_files
 from dashcraft.upstream import CloneError, clone_upstream_persistent
 from quickpack.pack import quick_pack
 
-CONFIG_FILENAME = 'dashcraft.yaml'
-
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -26,7 +24,7 @@ def _build_parser() -> argparse.ArgumentParser:
         '--project-dir',
         type=Path,
         default=Path.cwd(),
-        help='Project directory containing dashcraft.yaml (default: CWD)',
+        help='Project directory containing dashcraft.yaml or -craft.yaml (default: CWD)',
     )
     subparsers = parser.add_subparsers(dest='command')
 
@@ -58,11 +56,10 @@ def main() -> int:
 def _cmd_pack(args: argparse.Namespace) -> int:
     """Execute the 'pack' command — scaffold and pack."""
     project_dir = args.project_dir
-    config_path = project_dir / CONFIG_FILENAME
 
     # Step 1: Load config
     try:
-        config = load_config(config_path)
+        config = load_config(project_dir)
     except ConfigError as e:
         print(f'Error: {e}', file=sys.stderr)
         return 1

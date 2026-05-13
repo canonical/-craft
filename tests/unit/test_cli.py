@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-from dashcraft.cli import CONFIG_FILENAME, _build_parser, _check_pi_installed, main
+from dashcraft.cli import _build_parser, _check_pi_installed, main
 from tests.unit.helpers import MINIMAL_CONFIG, make_config
 
 
@@ -21,9 +21,6 @@ class TestBuildParser:
         parser = _build_parser()
         args = parser.parse_args([])
         assert args.project_dir == Path.cwd()
-
-    def test_config_filename(self) -> None:
-        assert CONFIG_FILENAME == 'dashcraft.yaml'
 
     def test_keep_source_flag(self) -> None:
         parser = _build_parser()

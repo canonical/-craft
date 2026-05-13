@@ -148,3 +148,27 @@ parts: {}
     def test_charm_part_returns_none_when_missing(self) -> None:
         config = Config(name='x', parts={'libs': CharmPart()})
         assert config.charm_part is None
+
+    def test_loads_dash_craft_yaml(self, tmp_path) -> None:
+        (tmp_path / '-craft.yaml').write_text(MINIMAL_CONFIG)
+        config = load_config(tmp_path)
+        assert config.name == 'my-charm'
+
+    def test_prefers_dashcraft_yaml_over_dash_craft_yaml(self, tmp_path) -> None:
+        (tmp_path / 'dashcraft.yaml').write_text(MINIMAL_CONFIG)
+        other = MINIMAL_CONFIG.replace('my-charm', 'other-charm')
+        (tmp_path / '-craft.yaml').write_text(other)
+        config = load_config(tmp_path)
+        assert config.name == 'my-charm'
+
+    def test_directory_without_config_file(self, tmp_path) -> None:
+        with pytest.raises(ConfigError) as exc_info:
+            load_config(tmp_path)
+        msg = str(exc_info.value)
+        assert 'dashcraft.yaml' in msg and '-craft.yaml' in msg
+
+    def test_loads_from_cwd_when_no_path(self, tmp_path, monkeypatch) -> None:
+        (tmp_path / '-craft.yaml').write_text(MINIMAL_CONFIG)
+        monkeypatch.chdir(tmp_path)
+        config = load_config()
+        assert config.name == 'my-charm'
