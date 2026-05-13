@@ -91,13 +91,19 @@ prepare: |
   sudo snap install concierge --classic
   sudo concierge prepare -p microk8s
 
+  # uv is needed to install both dashcraft (from source) and juju-cantrip
+  # (which provides the `quickpack` CLI that `dashcraft pack` invokes).
+  snap install uv --classic
+
+  # Install juju-cantrip as a uv tool so `quickpack` lands on PATH.
+  UV_TOOL_BIN_DIR=/usr/local/bin uv tool install juju-cantrip
+
   # If a dashcraft binary was uploaded alongside the tree, put it on PATH.
   # Otherwise, build and install from source so integration tests can run.
   if [[ -f "$SPREAD_PATH/dashcraft" ]]; then
     chmod a+x "$SPREAD_PATH/dashcraft"
     sudo cp "$SPREAD_PATH/dashcraft" /usr/local/bin/dashcraft
   else
-    snap install uv --classic
     cd "$SPREAD_PATH"
     uv venv --system-site-packages
     . .venv/bin/activate

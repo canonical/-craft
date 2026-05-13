@@ -34,7 +34,21 @@ cd dashcraft
 uv sync
 ```
 
-### 2. Install pi (required)
+### 2. Install quickpack (required)
+
+Dashcraft uses `quickpack` — a fast local charm packer — to produce the final `.charm` file. It ships as part of the [`juju-cantrip`](https://pypi.org/project/juju-cantrip/) PyPI package:
+
+```bash
+uv tool install juju-cantrip
+```
+
+Verify the installation:
+
+```bash
+quickpack --help
+```
+
+### 3. Install pi (required)
 
 Dashcraft uses `pi` — an AI coding agent — to generate charm code. Install it with npm:
 
@@ -48,7 +62,7 @@ Verify the installation:
 pi --version
 ```
 
-### 3. Set an API key
+### 4. Set an API key
 
 `pi` supports many model providers. Set at least one of the following environment variables:
 

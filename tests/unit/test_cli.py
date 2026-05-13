@@ -57,8 +57,6 @@ class TestMain:
                     else None
                 ),
             )
-            monkeypatch.setattr('quickpack.pack.quick_pack', lambda cwd: Path('result.charm'))
-
             with patch.object(
                 sys, 'argv', ['dashcraft', '--project-dir', str(project_dir), 'pack']
             ):
@@ -101,8 +99,6 @@ class TestMain:
                     else None
                 ),
             )
-            monkeypatch.setattr('quickpack.pack.quick_pack', lambda cwd: Path('result.charm'))
-
             with patch.object(
                 sys,
                 'argv',
