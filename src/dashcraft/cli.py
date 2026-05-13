@@ -10,7 +10,7 @@ from pathlib import Path
 
 from dashcraft.config import ConfigError, load_config
 from dashcraft.templates import get_files
-from dashcraft.upstream import CloneError, clone_upstream, clone_upstream_persistent
+from dashcraft.upstream import CloneError, clone_upstream_persistent
 from quickpack.pack import quick_pack
 
 CONFIG_FILENAME = 'dashcraft.yaml'
@@ -27,47 +27,10 @@ def _build_parser() -> argparse.ArgumentParser:
         default=Path.cwd(),
         help='Project directory containing dashcraft.yaml (default: CWD)',
     )
-    subparsers = parser.add_subparsers(dest='command')
-
-    # pack command
-    pack_parser = subparsers.add_parser(
-        'pack', help='Generate and pack a charm for the upstream workload'
-    )
-    pack_parser.add_argument(
+    parser.add_argument(
         '--keep-source',
         action='store_true',
         help='Keep the cloned upstream source directory (do not clean up on exit)',
-    )
-
-    # charm-init command
-    init_parser = subparsers.add_parser(
-        'charm-init', help='Scaffold a new Juju charm from a template'
-    )
-    init_parser.add_argument('name', help='Charm name in kebab-case')
-    init_parser.add_argument(
-        '--workload',
-        default='',
-        help='OCI image reference for the workload (optional)',
-    )
-    init_parser.add_argument(
-        '--directory',
-        default='',
-        help='Target directory (default: ./<name>)',
-    )
-    init_parser.add_argument(
-        '--force',
-        action='store_true',
-        help='Skip existing files instead of failing',
-    )
-
-    # lint command
-    subparsers.add_parser('lint', help='Lint the charm code (tox run -e lint)')
-
-    # test command
-    test_parser = subparsers.add_parser('test', help='Run charm tests')
-    test_parser.add_argument('--unit', action='store_true', help='Run unit tests only')
-    test_parser.add_argument(
-        '--integration', action='store_true', help='Run integration tests only'
     )
 
     return parser
@@ -77,32 +40,15 @@ def main() -> int:
     """Entry point for the dashcraft CLI."""
     parser = _build_parser()
     args = parser.parse_args()
-
-    if args.command is None:
-        parser.print_help()
-        return 1
-
-    if args.command == 'pack':
-        return _cmd_pack(args)
-
-    if args.command == 'charm-init':
-        return _cmd_charm_init(args)
-
-    if args.command == 'lint':
-        return _cmd_lint(args)
-
-    if args.command == 'test':
-        return _cmd_test(args)
-
-    parser.print_help()
-    return 1
+    return _cmd_pack(args)
 
 
 def _cmd_pack(args: argparse.Namespace) -> int:
-    """Execute the 'pack' command."""
-    config_path = args.project_dir / CONFIG_FILENAME
-    print(f'Project directory: {args.project_dir}')
+    """Execute the 'pack' command — scaffold, lint, test, and pack."""
+    project_dir = args.project_dir
+    config_path = project_dir / CONFIG_FILENAME
 
+    # Step 1: Load config
     try:
         config = load_config(config_path)
     except ConfigError as e:
@@ -114,31 +60,54 @@ def _cmd_pack(args: argparse.Namespace) -> int:
 
     print(f"Packing charm '{config.name}' from upstream: {charm_part.upstream}")
 
+    # Step 2: Clone upstream
     try:
         if args.keep_source:
             source_dir = clone_upstream_persistent(charm_part.upstream)
             print(f'Cloned upstream to: {source_dir}')
             print('(--keep-source: directory will not be cleaned up)')
-            # TODO: Analyze source, generate charm, pack it
-            print('Upstream source ready. (Charm generation not yet implemented.)')
-
-            if (args.project_dir / 'charmcraft.yaml').exists():
-                print('Found charmcraft.yaml — running quickpack...')
-                return _run_quickpack(args.project_dir)
         else:
-            with clone_upstream(charm_part.upstream) as source_dir:
-                print(f'Cloned upstream to: {source_dir}')
-                # TODO: Analyze source, generate charm, pack it
-                print('Upstream source ready. (Charm generation not yet implemented.)')
-
-                if (args.project_dir / 'charmcraft.yaml').exists():
-                    print('Found charmcraft.yaml — running quickpack...')
-                    return _run_quickpack(args.project_dir)
+            source_dir = clone_upstream_persistent(charm_part.upstream)
+            print(f'Cloned upstream to: {source_dir}')
     except CloneError as e:
         print(f'Error: {e}', file=sys.stderr)
         return 1
 
-    return 0
+    # TODO: Analyze source, generate charm
+    print('Upstream source ready. (Charm generation not yet implemented.)')
+
+    # Step 3: Scaffold charm files if charmcraft.yaml doesn't exist
+    if not (project_dir / 'charmcraft.yaml').exists():
+        scaffold_ret = _do_scaffold(project_dir, config.name)
+        if scaffold_ret != 0:
+            _cleanup_source(source_dir, args.keep_source)
+            return scaffold_ret
+
+    # Step 4: Lint
+    print('Running lint checks...')
+    lint_ret = _do_lint(project_dir)
+    if lint_ret != 0:
+        print('Warning: lint checks failed — continuing anyway')
+
+    # Step 5: Unit tests
+    print('Running unit tests...')
+    unit_ret = _do_unit_tests(project_dir)
+    if unit_ret != 0:
+        print('Warning: unit tests failed — continuing anyway')
+
+    # Step 6: Pack
+    print('Packing charm...')
+    pack_ret = _run_quickpack(project_dir)
+
+    _cleanup_source(source_dir, args.keep_source)
+
+    return pack_ret
+
+
+def _cleanup_source(source_dir: Path, keep: bool) -> None:
+    """Clean up the cloned upstream source unless --keep-source was given."""
+    if not keep:
+        shutil.rmtree(source_dir, ignore_errors=True)
 
 
 def _run_quickpack(cwd: Path) -> int:
@@ -176,31 +145,19 @@ def _run_charmcraft_pack(cwd: Path) -> int:
         return 1
 
 
-def _cmd_charm_init(args: argparse.Namespace) -> int:
-    """Execute the 'charm-init' command."""
-    name = args.name.strip()
-    if not name or not _is_valid_kebab_case(name):
+def _do_scaffold(project_dir: Path, name: str) -> int:
+    """Scaffold charm files from templates into the project directory."""
+    if not _is_valid_kebab_case(name):
         print(
             f'Error: Invalid charm name "{name}". Use kebab-case (e.g. "my-app").',
             file=sys.stderr,
         )
         return 1
 
-    subdir = args.directory.strip() or f'./{name}'
-    target_dir = Path.cwd() / subdir
-    workload_image = args.workload.strip() if args.workload else ''
-
-    if target_dir.exists() and any(target_dir.iterdir()) and not args.force:
-        print(
-            f'Error: Directory "{subdir}" already contains files. '
-            'Use --force to skip existing files, or choose a different directory.',
-            file=sys.stderr,
-        )
-        return 1
-
+    target_dir = project_dir
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    files = get_files(name, workload_image)
+    files = get_files(name)
     created: list[str] = []
     skipped: list[str] = []
 
@@ -213,16 +170,15 @@ def _cmd_charm_init(args: argparse.Namespace) -> int:
             full_path.write_text(content, encoding='utf-8')
             created.append(rel_path)
 
-    print(f'Charm "{name}" scaffolded in {subdir}.')
+    print(f'Scaffolded charm "{name}" into {project_dir}.')
     if created:
-        print(f'\nCreated {len(created)} files:')
+        print(f'Created {len(created)} files:')
         for f in created:
             print(f'  ✓ {f}')
     if skipped:
-        print(f'\nSkipped {len(skipped)} existing files:')
+        print(f'Skipped {len(skipped)} existing files:')
         for f in skipped:
             print(f'  - {f}')
-    print('\nNext: review charmcraft.yaml and src/charm.py, then run `dashcraft pack` to build.')
 
     return 0
 
@@ -237,17 +193,15 @@ def _is_valid_kebab_case(name: str) -> bool:
     return all(c in allowed for c in name)
 
 
-def _cmd_lint(args: argparse.Namespace) -> int:
-    """Execute the 'lint' command."""
-    cwd = args.project_dir
-
+def _do_lint(cwd: Path) -> int:
+    """Run lint checks via tox."""
     tox = shutil.which('tox')
     if not tox:
         print(
-            'Error: tox is not installed. Install it with: uv tool install tox',
+            'Warning: tox is not installed — skipping lint. Install it with: uv tool install tox',
             file=sys.stderr,
         )
-        return 1
+        return 0
 
     try:
         subprocess.run(
@@ -261,27 +215,24 @@ def _cmd_lint(args: argparse.Namespace) -> int:
         return 1
 
 
-def _cmd_test(args: argparse.Namespace) -> int:
-    """Execute the 'test' command."""
-    cwd = args.project_dir
-
+def _do_unit_tests(cwd: Path) -> int:
+    """Run unit tests via tox."""
     tox = shutil.which('tox')
     if not tox:
         print(
-            'Error: tox is not installed. Install it with: uv tool install tox',
+            'Warning: tox is not installed — skipping unit tests. '
+            'Install it with: uv tool install tox',
             file=sys.stderr,
         )
-        return 1
-
-    env = 'unit' if args.unit else 'integration' if args.integration else 'unit'
+        return 0
 
     try:
         subprocess.run(
-            [tox, 'run', '-e', env],
+            [tox, 'run', '-e', 'unit'],
             cwd=cwd,
             check=True,
         )
         return 0
     except subprocess.CalledProcessError as e:
-        print(f'Tests failed: {e}', file=sys.stderr)
+        print(f'Unit tests failed: {e}', file=sys.stderr)
         return 1
