@@ -1,72 +1,68 @@
 ---
 name: operational-patterns
-description: Actions, config validation, status management, backup/restore, and other operational readiness patterns.
+description: Actions, config validation, status management, backup/restore, diagnostics, secret rotation, and other operational readiness patterns a mature charm needs.
 ---
 
 # Operational Patterns
 
-## Config Options
+A mature charm provides config validation, the full action set
+(health-check, backup, restore, pause, resume, collect-diagnostics,
+rotate-credentials), an actionable status story, and Juju-secret-backed
+credentials. Add all of these — none are optional.
 
-Declared in `charmcraft.yaml`:
+## Config
 
+Declare options in `charmcraft.yaml`:
 ```yaml
 config:
   options:
     log-level:
       type: string
       default: info
-      description: Logging verbosity: debug, info, warning, error.
+      description: "debug | info | warning | error"
     port:
       type: int
       default: 8080
       description: Port the workload listens on.
 ```
 
-### Config validation
+Validate on `config_changed` and set `BlockedStatus` with an actionable
+message on invalid input — never silently accept:
 
 ```python
 VALID_LOG_LEVELS = {"debug", "info", "warning", "error"}
 
-
 def _on_config_changed(self, event: ops.ConfigChangedEvent) -> None:
-    log_level = self.config.get("log-level", "info")
-    if log_level not in VALID_LOG_LEVELS:
+    if self.config["log-level"] not in VALID_LOG_LEVELS:
         self.unit.status = ops.BlockedStatus(
-            f"Invalid log-level: {log_level!r}. "
-            f"Must be one of: {', '.join(sorted(VALID_LOG_LEVELS))}"
+            f"Invalid log-level: must be one of {sorted(VALID_LOG_LEVELS)}"
         )
         return
-
-    port = self.config["port"]
-    if not (1 <= port <= 65535):
-        self.unit.status = ops.BlockedStatus(f"Invalid port: {port}")
+    if not (1 <= self.config["port"] <= 65535):
+        self.unit.status = ops.BlockedStatus(f"Invalid port: {self.config['port']}")
         return
-
     self._apply_config()
-    self.unit.status = ops.ActiveStatus()
+    self._reconcile()
 ```
 
-Config names use hyphens; access with `self.config["log-level"]`.
+Config keys use hyphens; access with `self.config["log-level"]`.
 
-## Actions
+## Actions (mature charm checklist)
 
-Declared in `charmcraft.yaml`:
+A shippable charm provides **all** of these, declared in
+`charmcraft.yaml` under `actions:`:
 
-```yaml
-actions:
-  backup:
-    description: Create a backup of application data.
-    params:
-      path:
-        type: string
-        description: Destination path.
-        default: /var/backups
-    required: [path]
-    additionalProperties: false
-```
+| Action | Purpose |
+|---|---|
+| `health-check` | Probe processes + API; return per-check booleans |
+| `create-backup` | Snapshot workload state (DB dump, file archive) |
+| `restore-backup` | Replay a backup; verify integrity first |
+| `pause` | Stop the workload service for maintenance |
+| `resume` | Restart and re-reconcile |
+| `rotate-credentials` | Generate a new password / cert (leader-only) |
+| `collect-diagnostics` | Bundle config (redacted) + service state for support |
 
-### Action handler
-
+### Action handler pattern
 ```python
 def _on_backup(self, event: ops.ActionEvent) -> None:
     path = event.params["path"]
@@ -77,196 +73,122 @@ def _on_backup(self, event: ops.ActionEvent) -> None:
         event.fail(f"Backup path does not exist: {path}")
 ```
 
-### Leader-only actions
+Leader-only actions guard with `self.unit.is_leader()` and `event.fail()`
+otherwise. Long-running actions call `event.log("...")` for progress so
+`juju show-action-output` is readable.
 
+### Diagnostics action — always redact
+
+When bundling config or env for support, scrub anything containing
+`password`, `secret`, `token`, `key`:
 ```python
-def _on_rotate_credentials(self, event: ops.ActionEvent) -> None:
-    if not self.unit.is_leader():
-        event.fail("Credential rotation must run on the leader.")
-        return
-    self._rotate_password()
-    event.set_results({"status": "rotated"})
+safe = {
+    k: ("***REDACTED***" if any(s in k.lower() for s in ("password","secret","token","key")) else str(v))
+    for k, v in self.config.items()
+}
+event.set_results({"diagnostics": json.dumps({"config": safe, ...}, indent=2)})
 ```
 
-### Long-running actions
-
+### Backup snippet (Pebble exec)
 ```python
-def _on_backup(self, event: ops.ActionEvent) -> None:
-    event.log("Starting backup...")
-    self._dump_database(event.params["path"])
-    event.log("Compressing...")
-    archive = self._compress_backup(event.params["path"])
-    event.log("Backup complete.")
-    event.set_results({"archive": str(archive)})
+process = self._container.exec(
+    ["pg_dump", "-Fc", "-f", backup_path], environment=self._db_env(),
+)
+process.wait_output()
 ```
 
-## Status Management
+## Status — single source of truth
 
-Use actionable messages — the operator should know what to do:
-
-```python
-# Missing config
-if not self.config.get("database-uri"):
-    self.unit.status = ops.BlockedStatus("Set 'database-uri' config to continue")
-    return
-
-# Missing relation
-if not self.model.get_relation("database"):
-    self.unit.status = ops.BlockedStatus("Integrate with a database: juju integrate <app> postgresql")
-    return
-
-# Waiting for data
-if not relation.data[relation.app].get("connection-string"):
-    self.unit.status = ops.WaitingStatus("Waiting for database credentials")
-    return
-
-# All good
-self.unit.status = ops.ActiveStatus()
-```
-
-### Reconciliation pattern
+Every code path ends with a status. Centralise in `_reconcile()`:
 
 ```python
 def _reconcile(self) -> None:
-    """Single source of truth for unit status."""
     if self._is_paused():
         self.unit.status = ops.MaintenanceStatus("Paused — run 'resume' action")
         return
     if not self.model.get_relation("database"):
-        self.unit.status = ops.BlockedStatus("Missing database relation")
+        self.unit.status = ops.BlockedStatus(
+            "Integrate with a database: juju integrate <app> postgresql"
+        )
+        return
+    relation = self.model.get_relation("database")
+    if not relation.data[relation.app].get("connection-string"):
+        self.unit.status = ops.WaitingStatus("Waiting for database credentials")
         return
     self.unit.status = ops.ActiveStatus()
 ```
 
-## Health-Check Action
+Pick the right type:
+- `BlockedStatus` — operator must do something (set config, integrate).
+- `WaitingStatus` — waiting on Juju/another charm to deliver something.
+- `MaintenanceStatus` — busy or intentionally paused.
+- `ActiveStatus` — running normally.
+
+## Health-check action shape
 
 ```python
-def _on_get_health(self, event: ops.ActionEvent) -> None:
-    checks = {}
-
-    # Core processes
-    try:
-        services = self._container.get_services()
-        checks["processes"] = all(svc.is_running() for svc in services.values())
-    except ops.pebble.ConnectionError:
-        checks["processes"] = False
-
-    # API check
-    try:
-        resp = httpx.get(f"http://localhost:{self._port}/health", timeout=5)
-        checks["api"] = resp.status_code == 200
-    except httpx.HTTPError:
-        checks["api"] = False
-
+def _on_health_check(self, event: ops.ActionEvent) -> None:
+    checks = {
+        "processes": all(s.is_running() for s in self._container.get_services().values()),
+        "api": _probe(f"http://localhost:{self._port}/health"),
+    }
     healthy = all(checks.values())
     event.set_results({"healthy": healthy, "checks": checks})
     if not healthy:
-        event.fail(f"Unhealthy: {[k for k, v in checks.items() if not v]}")
+        event.fail(f"Unhealthy: {[k for k,v in checks.items() if not v]}")
 ```
 
-## Pause and Resume
+## Pause / resume
 
 ```python
-def _on_pause(self, event: ops.ActionEvent) -> None:
+def _on_pause(self, event):
     self._container.stop("workload")
-    self._paused = True
     self.unit.status = ops.MaintenanceStatus("Paused — run 'resume' to restart")
-    event.set_results({"status": "paused"})
 
-def _on_resume(self, event: ops.ActionEvent) -> None:
+def _on_resume(self, event):
     self._container.start("workload")
-    self._paused = False
     self._reconcile()
-    event.set_results({"status": "resumed"})
 ```
 
-## Backup and Restore
+## Secrets — always Juju, never config
 
+Generate on first leader hook; expose to relations via id, never value:
 ```python
-def _on_create_backup(self, event: ops.ActionEvent) -> None:
-    timestamp = datetime.datetime.now(tz=datetime.UTC).strftime("%Y%m%d-%H%M%S")
-    backup_path = f"/backups/{self.app.name}-{timestamp}.tar.gz"
-
-    try:
-        process = self._container.exec(
-            ["pg_dump", "-Fc", "-f", backup_path],
-            environment=self._db_env(),
-        )
-        process.wait_output()
-    except ops.pebble.ExecError as e:
-        event.fail(f"Backup failed: {e.stderr}")
-        return
-
-    event.set_results({"backup-id": timestamp, "path": backup_path, "status": "completed"})
+secret = self.app.add_secret({"password": _generate_password()})
+secret.grant(relation)
+event.relation.data[self.app]["password-id"] = secret.id
 ```
 
-## Diagnostics Bundle
-
-```python
-def _on_collect_diagnostics(self, event: ops.ActionEvent) -> None:
-    bundle = {}
-
-    # Config (scrub secrets)
-    safe_config = {}
-    for key, value in self.config.items():
-        if any(s in key.lower() for s in ("password", "secret", "token", "key")):
-            safe_config[key] = "***REDACTED***"
-        else:
-            safe_config[key] = str(value)
-    bundle["config"] = safe_config
-
-    # Services
-    try:
-        services = self._container.get_services()
-        bundle["services"] = {
-            name: {"running": svc.is_running()}
-            for name, svc in services.items()
-        }
-    except ops.pebble.ConnectionError:
-        bundle["services"] = "pebble not ready"
-
-    event.set_results({"diagnostics": json.dumps(bundle, indent=2)})
-```
-
-## Secret Rotation
-
+Implement `_on_secret_rotate` (and observe `self.on.secret_rotate`):
 ```python
 def _on_secret_rotate(self, event: ops.SecretRotateEvent) -> None:
-    new_password = self._generate_password()
-    event.secret.set_content({"password": new_password})
+    event.secret.set_content({"password": _generate_password()})
 ```
 
 ## Publishing to Charmhub
 
 ```bash
-# 1. Validate
 charmcraft pack
-charmcraft analyse ./my-charm.charm
-
-# 2. Register (first time only)
-charmcraft register my-charm
-
-# 3. Upload
-charmcraft upload ./my-charm.charm --release=edge
-
-# 4. Promote through channels
-charmcraft release my-charm --revision=5 --channel=beta
-charmcraft promote my-charm --from=beta --to=stable
+charmcraft analyse ./*.charm           # lint before upload
+charmcraft register my-charm           # first time only
+charmcraft upload ./*.charm --release=edge
+charmcraft promote my-charm --from=edge --to=beta
 ```
+Channel flow: `edge` → `beta` → `candidate` → `stable`.
 
-Channel flow: `edge` → `beta` → `candidate` → `stable`
+## PyPI vs Charmhub libraries
 
-## PyPI vs Charmhub Libraries
+Prefer PyPI — versioned, no `charmcraft fetch-libs` step:
 
-Prefer PyPI packages when available — they're versioned and avoid `charmcraft fetch-libs`:
-
-| PyPI Package | Replaces |
+| PyPI package | Replaces |
 |---|---|
-| `ops-tracing` | — |
+| `ops-tracing` | (new) |
 | `cosl` | COS Lite utilities |
-| `charmlibs-pathops` | Pebble/local filesystem ops |
+| `charmlibs-pathops` | Pebble / local filesystem ops |
 | `charmlibs-apt` | `charms.operator_libs_linux.v0.apt` |
 | `charmlibs-snap` | `charms.operator_libs_linux.v*.snap` |
 | `charmlibs-systemd` | `charms.operator_libs_linux.v*.systemd` |
 
-Still need `charmcraft fetch-libs` for: `charms.loki_k8s.*`, `charms.grafana_k8s.*`, `charms.prometheus_k8s.*`, `charms.traefik_k8s.*`, `charms.tempo_*`, `charms.catalogue_k8s.*`, `charms.data_platform_libs.*`.
+Still need `charmcraft fetch-libs` for: `loki_k8s`, `grafana_k8s`,
+`prometheus_k8s`, `traefik_k8s`, `tempo_*`, `catalogue_k8s`,
+`data_platform_libs`.
