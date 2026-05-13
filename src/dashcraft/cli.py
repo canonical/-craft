@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -94,7 +95,19 @@ def _cmd_pack(args: argparse.Namespace) -> int:
             _cleanup_source(source_dir, args.keep_source)
             return scaffold_ret
 
-    # Step 4: Pack
+    # Step 4: Check that pi is installed (required for charm generation)
+    ret = _check_pi_installed()
+    if ret != 0:
+        _cleanup_source(source_dir, args.keep_source)
+        return ret
+
+    # TODO: Start pi in RPC mode and generate charm code
+    print('pi is ready. AI charm generation coming soon.')
+
+    _cleanup_source(source_dir, args.keep_source)
+    return 0
+
+    # Step 5: Pack (unreachable for now — future work)
     print('Packing charm...')
     pack_ret = _run_quickpack(project_dir)
 
@@ -168,6 +181,44 @@ def _do_scaffold(project_dir: Path, name: str, workload_image: str = '') -> int:
     else:
         print('Warning: uv not found — skipping uv.lock generation', file=sys.stderr)
 
+    return 0
+
+
+def _check_pi_installed() -> int:
+    """Check that pi is installed and an API key is set."""
+    pi_path = shutil.which('pi')
+    if not pi_path:
+        print("Error: 'pi' is not installed.", file=sys.stderr)
+        print(
+            'Install it with:\n  sudo npm install -g @earendil-works/pi-coding-agent',
+            file=sys.stderr,
+        )
+        return 1
+
+    # Check for at least one known API key env var
+    known_keys = {
+        'ANTHROPIC_API_KEY',
+        'OPENAI_API_KEY',
+        'GEMINI_API_KEY',
+        'AZURE_OPENAI_API_KEY',
+        'DEEPSEEK_API_KEY',
+        'GROQ_API_KEY',
+        'MISTRAL_API_KEY',
+        'OPENROUTER_API_KEY',
+        'FIREWORKS_API_KEY',
+    }
+    if not any(os.environ.get(k) for k in known_keys):
+        print('Error: No API key found for pi.', file=sys.stderr)
+        print(
+            'Set one of the supported API key environment variables, e.g.:\n'
+            '  export GEMINI_API_KEY=<your-key>\n'
+            '  export ANTHROPIC_API_KEY=<your-key>',
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f'Found pi at {pi_path}')
+    print('API key configured.')
     return 0
 
 

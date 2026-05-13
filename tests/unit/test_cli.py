@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-from dashcraft.cli import CONFIG_FILENAME, _build_parser, main
+from dashcraft.cli import CONFIG_FILENAME, _build_parser, _check_pi_installed, main
 from tests.unit.helpers import MINIMAL_CONFIG, make_config
 
 
@@ -48,10 +48,17 @@ class TestMain:
                     )
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout='', stderr='')
 
+            monkeypatch.setenv('GEMINI_API_KEY', 'fake-key')
             monkeypatch.setattr('subprocess.run', fake_run)
             monkeypatch.setattr(
                 'shutil.which',
-                lambda cmd: '/usr/bin/git' if cmd == 'git' else None,
+                lambda cmd: (
+                    '/usr/bin/git'
+                    if cmd == 'git'
+                    else '/usr/local/bin/pi'
+                    if cmd == 'pi'
+                    else None
+                ),
             )
             monkeypatch.setattr('quickpack.pack.quick_pack', lambda cwd: Path('result.charm'))
 
@@ -64,7 +71,7 @@ class TestMain:
         captured = capsys.readouterr()
         assert 'my-charm' in captured.out
         assert 'Cloned upstream to:' in captured.out
-        assert 'Upstream source ready' in captured.out
+        assert 'pi is ready' in captured.out
 
     def test_pack_fails_on_missing_config(self, capsys) -> None:
         with patch.object(sys, 'argv', ['dashcraft', '--project-dir', '/nonexistent', 'pack']):
@@ -85,10 +92,17 @@ class TestMain:
                     )
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout='', stderr='')
 
+            monkeypatch.setenv('GEMINI_API_KEY', 'fake-key')
             monkeypatch.setattr('subprocess.run', fake_run)
             monkeypatch.setattr(
                 'shutil.which',
-                lambda cmd: '/usr/bin/git' if cmd == 'git' else None,
+                lambda cmd: (
+                    '/usr/bin/git'
+                    if cmd == 'git'
+                    else '/usr/local/bin/pi'
+                    if cmd == 'pi'
+                    else None
+                ),
             )
             monkeypatch.setattr('quickpack.pack.quick_pack', lambda cwd: Path('result.charm'))
 
@@ -103,4 +117,36 @@ class TestMain:
         captured = capsys.readouterr()
         assert 'my-charm' in captured.out
         assert 'directory will not be cleaned up' in captured.out
-        assert 'Upstream source ready' in captured.out
+        assert 'pi is ready' in captured.out
+
+
+class TestCheckPi:
+    def test_returns_error_when_pi_not_found(self, monkeypatch) -> None:
+        monkeypatch.setattr('shutil.which', lambda cmd: None)
+        assert _check_pi_installed() == 1
+
+    def test_returns_error_when_no_api_key(self, monkeypatch) -> None:
+        known_keys = [
+            'ANTHROPIC_API_KEY',
+            'OPENAI_API_KEY',
+            'GEMINI_API_KEY',
+            'AZURE_OPENAI_API_KEY',
+            'DEEPSEEK_API_KEY',
+            'GROQ_API_KEY',
+            'MISTRAL_API_KEY',
+            'OPENROUTER_API_KEY',
+            'FIREWORKS_API_KEY',
+        ]
+        for key in known_keys:
+            monkeypatch.delenv(key, raising=False)
+        monkeypatch.setattr(
+            'shutil.which', lambda cmd: '/usr/local/bin/pi' if cmd == 'pi' else None
+        )
+        assert _check_pi_installed() == 1
+
+    def test_succeeds_with_pi_and_api_key(self, monkeypatch) -> None:
+        monkeypatch.setenv('GEMINI_API_KEY', 'test-key')
+        monkeypatch.setattr(
+            'shutil.which', lambda cmd: '/usr/local/bin/pi' if cmd == 'pi' else None
+        )
+        assert _check_pi_installed() == 0
