@@ -19,7 +19,7 @@ def _to_title(name: str) -> str:
 
 
 def _gitignore() -> str:
-    return 'venv/\nbuild/\n*.charm\n.tox/\n.coverage\n__pycache__/\n*.py[cod]\n.idea\n.vscode/\n'
+    return 'venv/\nbuild/\n*.charm\n.tox/\n.coverage\n__pycache__/\n*.py[cod]\n.idea\n.vscode/\n.pi/\n'
 
 
 def _license() -> str:

@@ -210,6 +210,14 @@ def _run_quickpack(cwd: Path) -> int:
     return 0
 
 
+def _find_source_pi_dir() -> Path | None:
+    """Find the source .pi directory bundled with dashcraft.
+
+    Resolves relative to the package location (src/dashcraft/ -> project root).
+    """
+    return Path(__file__).resolve().parent.parent / '.pi'
+
+
 def _do_scaffold(project_dir: Path, name: str, workload_image: str = '') -> int:
     """Scaffold charm files from templates into the project directory."""
     if not _is_valid_kebab_case(name):
@@ -234,6 +242,16 @@ def _do_scaffold(project_dir: Path, name: str, workload_image: str = '') -> int:
             full_path.parent.mkdir(parents=True, exist_ok=True)
             full_path.write_text(content, encoding='utf-8')
             created.append(rel_path)
+
+    # Copy the .pi directory (pi extension & skills) into the scaffolded charm.
+    _source_pi = _find_source_pi_dir()
+    if _source_pi and _source_pi.is_dir():
+        _dest_pi = target_dir / '.pi'
+        if not _dest_pi.exists():
+            shutil.copytree(_source_pi, _dest_pi)
+            created.append('.pi/')
+        else:
+            skipped.append('.pi/')
 
     print(f'Scaffolded charm "{name}" into {project_dir}.')
     if created:
