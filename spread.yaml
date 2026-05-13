@@ -93,7 +93,8 @@ prepare: |
 
   # uv is needed to install both dashcraft (from source) and juju-cantrip
   # (which provides the `quickpack` CLI that `dashcraft pack` invokes).
-  snap install uv --classic
+  # Installed via the official script — there is no `uv` snap.
+  curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin UV_NO_MODIFY_PATH=1 sh
 
   # Install juju-cantrip as a uv tool so `quickpack` lands on PATH.
   UV_TOOL_BIN_DIR=/usr/local/bin uv tool install juju-cantrip
