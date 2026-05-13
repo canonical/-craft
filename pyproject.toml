@@ -10,6 +10,7 @@ dependencies = [
 
 [project.scripts]
 dashcraft = "dashcraft:main"
+"-craft" = "dashcraft:main"
 
 [dependency-groups]
 dev = [

@@ -238,7 +238,7 @@ def _find_source_pi_dir() -> Path | None:
 
     Resolves relative to the package location (src/dashcraft/ -> project root).
     """
-    return Path(__file__).resolve().parent.parent.parent / '.pi'
+    return Path(__file__).resolve().parent / '.pi'
 
 
 def _do_scaffold(project_dir: Path, name: str, workload_image: str = '') -> int:

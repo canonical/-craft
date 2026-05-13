@@ -24,12 +24,7 @@ from typing import Any
 # ---------------------------------------------------------------------------
 
 _EXTENSION_PATH = (
-    Path(__file__).resolve().parent.parent.parent
-    / '..'
-    / '.pi'
-    / 'extensions'
-    / 'juju-charm'
-    / 'index.ts'
+    Path(__file__).resolve().parent / '.pi' / 'extensions' / 'juju-charm' / 'index.ts'
 )
 
 
