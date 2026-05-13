@@ -12,7 +12,6 @@ from pathlib import Path
 from dashcraft.config import ConfigError, load_config
 from dashcraft.templates import get_files
 from dashcraft.upstream import CloneError, clone_upstream_persistent
-from quickpack.pack import quick_pack
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -120,14 +119,21 @@ def _cleanup_source(source_dir: Path, keep: bool) -> None:
 
 
 def _run_quickpack(cwd: Path) -> int:
-    """Run quickpack in the given directory."""
-    try:
-        charm_path = quick_pack(cwd)
-        print(f'Created {charm_path.name}')
-        return 0
-    except (FileNotFoundError, ValueError, RuntimeError, OSError) as e:
-        print(f'quickpack failed: {e}', file=sys.stderr)
+    """Run the `quickpack` CLI (from the juju-cantrip PyPI package) in the given directory."""
+    quickpack_path = shutil.which('quickpack')
+    if not quickpack_path:
+        print("Error: 'quickpack' is not installed.", file=sys.stderr)
+        print(
+            'Install it with:\n  uv tool install juju-cantrip',
+            file=sys.stderr,
+        )
         return 1
+    try:
+        subprocess.run([quickpack_path], cwd=cwd, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f'quickpack failed (exit {e.returncode})', file=sys.stderr)
+        return e.returncode or 1
+    return 0
 
 
 def _do_scaffold(project_dir: Path, name: str, workload_image: str = '') -> int:

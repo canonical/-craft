@@ -22,7 +22,7 @@ dev = [
 [tool.ruff]
 line-length = 99
 target-version = "py314"
-extend-exclude = [".clones", "src/quickpack", "src/pypi_attest"]
+extend-exclude = [".clones"]
 
 [tool.ruff.format]
 quote-style = 'single'
