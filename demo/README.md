@@ -56,20 +56,6 @@ python3 -m http.server 8000
 The player defaults to **4x playback** so a ~20-min recording finishes in
 roughly five minutes. Switch with the speed dropdown (1x–8x).
 
-## Audio
-
-Drop an audio file at `demo/soundtrack.mp3` and the page picks it up
-automatically. The HTML keeps audio in sync with the player at any speed by
-sampling `player.getCurrentTime()` every 500 ms and nudging `audio.currentTime`
-whenever drift exceeds 0.6 s.
-
-If `soundtrack.mp3` is missing, the page still works — you'll just see a
-"no soundtrack" badge next to the controls. Other formats (`.ogg`, `.wav`)
-work too; just change the `<audio src=…>` attribute in `index.html`.
-
-> Browsers block audio autoplay until the user clicks something, so the page
-> exposes an explicit **▶ Play (with audio)** button.
-
 ## How the speedup works
 
 Three knobs combine to fit a long real run into a short playback:
@@ -93,5 +79,5 @@ passed to `tmux split-window`.
 | `record.sh` | entry point — validates prereqs, builds the tmux layout, drives the demo, records |
 | `pane-flow.sh` | runs inside each of the four demo panes (types yaml → pack → deploy) |
 | `typewriter.py` | char-by-char "typing" output used by pane-flow |
-| `index.html` | asciinema-player + audio overlay for playback |
+| `index.html` | asciinema-player for playback |
 | `dashcraft-demo.cast` | produced by `record.sh` |

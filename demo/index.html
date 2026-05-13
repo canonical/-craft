@@ -62,9 +62,6 @@
   }
   .controls button:hover { border-color: var(--accent); color: var(--accent); }
   .controls label { display: inline-flex; gap: 8px; align-items: center; }
-  .controls .audio-status { font-size: 12px; }
-  .controls .audio-status.ok    { color: #6fcf97; }
-  .controls .audio-status.miss  { color: #f2994a; }
   footer {
     padding: 12px 24px 24px;
     color: var(--muted);
@@ -85,7 +82,7 @@
   </div>
 
   <div class="controls">
-    <button id="play-btn">▶ Play (with audio)</button>
+    <button id="play-btn">▶ Play</button>
     <button id="restart-btn">⟲ Restart</button>
     <label>
       speed
@@ -98,32 +95,21 @@
         <option value="8">8x</option>
       </select>
     </label>
-    <label>
-      audio
-      <input type="range" id="volume" min="0" max="1" step="0.01" value="0.4">
-    </label>
-    <span id="audio-status" class="audio-status"></span>
   </div>
-
-  <audio id="soundtrack" preload="auto" loop src="soundtrack.mp3"></audio>
 </main>
 
 <footer>
   Cast file: <code>dashcraft-demo.cast</code> ·
-  Re-record with <code>demo/record.sh</code> ·
-  Drop a soundtrack at <code>demo/soundtrack.mp3</code>.
+  Re-record with <code>demo/record.sh</code>.
 </footer>
 
 <script src="https://cdn.jsdelivr.net/npm/asciinema-player@3/dist/bundle/asciinema-player.min.js"></script>
 <script>
 (function () {
   const playerEl = document.getElementById('player');
-  const audio    = document.getElementById('soundtrack');
   const playBtn  = document.getElementById('play-btn');
   const restartBtn = document.getElementById('restart-btn');
   const speedSel = document.getElementById('speed');
-  const volume   = document.getElementById('volume');
-  const audioStatus = document.getElementById('audio-status');
 
   let player = null;
   let speed  = parseFloat(speedSel.value);
@@ -138,44 +124,16 @@
       controls: true,
       preload: true,
     });
-
-    // Sync audio with playback.
-    player.addEventListener('play',  onPlay);
-    player.addEventListener('pause', onPause);
-    player.addEventListener('ended', onEnded);
   }
 
-  function onPlay()  { audio.play().catch(() => {}); syncAudio(); }
-  function onPause() { audio.pause(); }
-  function onEnded() { audio.pause(); audio.currentTime = 0; }
-
-  // Poll-based sync: player.currentTime is in cast seconds, audio is in
-  // wall-clock seconds.  At speed=N, audio.currentTime should track
-  // player.currentTime / N.
-  function syncAudio() {
-    if (!player) return;
-    Promise.resolve(player.getCurrentTime()).then((castTime) => {
-      if (typeof castTime !== 'number') return;
-      const wallTime = castTime / speed;
-      if (Math.abs(audio.currentTime - wallTime) > 0.6) {
-        try { audio.currentTime = wallTime; } catch (_) {}
-      }
-    });
-  }
-  setInterval(syncAudio, 500);
-
-  // Wire up controls.
   playBtn.addEventListener('click', () => {
     if (!player) return;
-    audio.volume = parseFloat(volume.value);
     player.play();
   });
 
   restartBtn.addEventListener('click', () => {
     if (!player) return;
     player.seek(0);
-    audio.currentTime = 0;
-    audio.volume = parseFloat(volume.value);
     player.play();
   });
 
@@ -184,19 +142,6 @@
     buildPlayer();   // asciinema-player 3.x has no live speed setter.
   });
 
-  volume.addEventListener('input', () => { audio.volume = parseFloat(volume.value); });
-
-  // Detect whether the soundtrack file is present.
-  audio.addEventListener('error', () => {
-    audioStatus.textContent = 'no soundtrack.mp3 — drop one in demo/ to get audio';
-    audioStatus.className = 'audio-status miss';
-  });
-  audio.addEventListener('canplaythrough', () => {
-    audioStatus.textContent = '♪ soundtrack loaded';
-    audioStatus.className = 'audio-status ok';
-  });
-
-  audio.volume = parseFloat(volume.value);
   buildPlayer();
 })();
 </script>
