@@ -97,23 +97,39 @@ def _contributing() -> str:
     )
 
 
-def _charmcraft_yaml(name: str, workload_image: str = '') -> str:
+def _charmcraft_yaml(
+    name: str, workload_image: str = '', summary: str = '', description: str = ''
+) -> str:
     title = _to_title(name)
     upstream_source = f'    upstream-source: {workload_image}\n' if workload_image else ''
+    summary_line = (
+        f'summary: {summary}\n'
+        if summary
+        else 'summary: A very short one-line summary of the charm.\n'
+    )
+    if description:
+        # Indent each line of the description under the '|' block scalar
+        desc_lines = description.split('\n')
+        desc_block = '\n'.join(f'  {line}' for line in desc_lines)
+        description_block = f'description: |\n{desc_block}\n'
+    else:
+        description_block = (
+            'description: |\n'
+            '  A single sentence that says what the charm is, concisely and memorably.\n'
+            '\n'
+            '  A paragraph of one to three short sentences, that describe what the charm does.\n'
+            '\n'
+            '  A third paragraph that explains what need the charm meets.\n'
+            '\n'
+            '  Finally, a paragraph that describes whom the charm is useful for.\n'
+        )
     return (
         f'# {name} charm\n'
         'type: charm\n'
         f'name: {name}\n'
         f'title: {title} Charm\n'
-        'summary: A very short one-line summary of the charm.\n'
-        'description: |\n'
-        '  A single sentence that says what the charm is, concisely and memorably.\n'
-        '\n'
-        '  A paragraph of one to three short sentences, that describe what the charm does.\n'
-        '\n'
-        '  A third paragraph that explains what need the charm meets.\n'
-        '\n'
-        '  Finally, a paragraph that describes whom the charm is useful for.\n'
+        f'{summary_line}'
+        f'{description_block}'
         '\n'
         'base: ubuntu@24.04\n'
         'platforms:\n'
@@ -448,7 +464,9 @@ def _integration_test_charm(name: str) -> str:
     )
 
 
-def get_files(name: str, workload_image: str = '') -> dict[str, str]:
+def get_files(
+    name: str, workload_image: str = '', summary: str = '', description: str = ''
+) -> dict[str, str]:
     """Return a mapping of relative path -> content for a scaffolded charm."""
     module_name = _to_module_name(name)
     return {
@@ -456,7 +474,7 @@ def get_files(name: str, workload_image: str = '') -> dict[str, str]:
         'CONTRIBUTING.md': _contributing(),
         'LICENSE': _license(),
         'README.md': _readme(name),
-        'charmcraft.yaml': _charmcraft_yaml(name, workload_image),
+        'charmcraft.yaml': _charmcraft_yaml(name, workload_image, summary, description),
         'pyproject.toml': _pyproject_toml(name),
         'tox.ini': _tox_ini(),
         'src/charm.py': _src_charm_py(name),

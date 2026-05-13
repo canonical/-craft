@@ -146,7 +146,9 @@ def _cmd_pack(args: argparse.Namespace) -> int:
         return 1
 
     # Step 4: Scaffold charm files into .tmp/charm
-    scaffold_ret = _do_scaffold(charm_dir, config.name, charm_part.workload)
+    scaffold_ret = _do_scaffold(
+        charm_dir, config.name, charm_part.workload, config.summary, config.description
+    )
     if scaffold_ret != 0:
         _cleanup_tmp(tmp_dir, args.keep_source)
         return scaffold_ret
@@ -244,7 +246,13 @@ def _find_source_pi_dir() -> Path | None:
     return Path(__file__).resolve().parent / '.pi'
 
 
-def _do_scaffold(target_dir: Path, name: str, workload_image: str = '') -> int:
+def _do_scaffold(
+    target_dir: Path,
+    name: str,
+    workload_image: str = '',
+    summary: str = '',
+    description: str = '',
+) -> int:
     """Scaffold charm files from templates into the project directory."""
     if not _is_valid_kebab_case(name):
         print(
@@ -255,7 +263,7 @@ def _do_scaffold(target_dir: Path, name: str, workload_image: str = '') -> int:
 
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    files = get_files(name, workload_image)
+    files = get_files(name, workload_image, summary, description)
     created: list[str] = []
     skipped: list[str] = []
 
