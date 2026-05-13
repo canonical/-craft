@@ -1,0 +1,16 @@
+summary: Scaffold, pack, and deploy a Suite Numérique Docs charm
+# Upstream: https://github.com/suitenumerique/docs
+systems:
+  - ubuntu-24.04
+
+environment:
+  NAME: suite-docs
+  WORKLOAD_IMAGE: ghcr.io/suitenumerique/docs-backend:latest
+
+execute: |
+  source "$SPREAD_PATH/tests/charm-helpers.sh"
+  pack_and_deploy
+
+restore: |
+  source "$SPREAD_PATH/tests/charm-helpers.sh"
+  cleanup

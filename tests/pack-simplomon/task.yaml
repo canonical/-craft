@@ -1,0 +1,17 @@
+summary: Scaffold, pack, and deploy a Simplomon charm
+# Upstream: https://codeberg.org/berthubert/simplomon
+systems:
+  - ubuntu-24.04
+
+environment:
+  NAME: simplomon
+  # TODO: confirm upstream image ref — simplomon ships primarily as a binary.
+  WORKLOAD_IMAGE: docker.io/berthubert/simplomon:latest
+
+execute: |
+  source "$SPREAD_PATH/tests/charm-helpers.sh"
+  pack_and_deploy
+
+restore: |
+  source "$SPREAD_PATH/tests/charm-helpers.sh"
+  cleanup

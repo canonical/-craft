@@ -1,0 +1,16 @@
+summary: Scaffold, pack, and deploy an IronCalc charm
+# Upstream: https://github.com/ironcalc/IronCalc
+systems:
+  - ubuntu-24.04
+
+environment:
+  NAME: ironcalc
+  WORKLOAD_IMAGE: ghcr.io/ironcalc/ironcalc:latest
+
+execute: |
+  source "$SPREAD_PATH/tests/charm-helpers.sh"
+  pack_and_deploy
+
+restore: |
+  source "$SPREAD_PATH/tests/charm-helpers.sh"
+  cleanup

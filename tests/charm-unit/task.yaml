@@ -1,0 +1,17 @@
+summary: A freshly scaffolded charm passes `tox run -e unit`
+systems:
+  - ubuntu-24.04
+
+environment:
+  NAME: unit-smoke
+
+execute: |
+  source "$SPREAD_PATH/tests/charm-helpers.sh"
+  scaffold_charm
+
+  sudo snap install tox --classic 2>/dev/null || true
+  tox run -e unit
+
+restore: |
+  source "$SPREAD_PATH/tests/charm-helpers.sh"
+  cleanup

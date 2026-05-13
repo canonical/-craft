@@ -1,0 +1,7 @@
+summary: dashcraft CLI responds to --help and --version
+systems:
+  - ubuntu-24.04
+
+execute: |
+  dashcraft --version
+  dashcraft --help | grep -q charm-init
