@@ -16,7 +16,7 @@ format:  # Format the Python code
 lint:  # Perform linting and static type checks
 	uv run ruff check
 	uv run ruff format --diff
-	uv run pyright
+	uv run ty check
 
 unit:  # Run unit tests, eg: make unit ARGS='tests/unit/test_config.py'
 	uv run pytest tests/unit -vv --cov=dashcraft $(ARGS)

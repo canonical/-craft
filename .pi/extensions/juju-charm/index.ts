@@ -5,11 +5,17 @@
  * scaffold matching `charmcraft init --profile kubernetes`.
  *
  * Features:
- *   /charm-init [name]  — scaffold a new charm interactively
- *   charm_init          — tool for the LLM to scaffold charms
- *   charm_build         — run `charmcraft pack`
- *   charm_lint          — run `tox run -e lint`
- *   charm_test_unit     — run `tox run -e unit`
+ *   /charm-init [name]     — scaffold a new charm interactively
+ *   charm_init             — tool for the LLM to scaffold charms
+ *   charm_build            — run `charmcraft pack`
+ *   charm_lint             — run `tox run -e lint`
+ *   charm_test_unit        — run `tox run -e unit`
+ *   charm_test_integration — run `tox run -e integration`
+ *   charm_help             — list available skills and reference docs
+ *
+ * Skills loaded (callable via /skill:<name>):
+ *   quick-charm-workflow, relations, charm-testing, observability,
+ *   operational-patterns, quality-review, debugging
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -20,6 +26,9 @@ import * as path from "node:path";
 import { execSync } from "node:child_process";
 
 import { allFiles, makeContext } from "./templates";
+
+/** Skills shipped with this extension. */
+const SKILLS_DIR = path.resolve(__dirname, "..", "skills");
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -62,6 +71,14 @@ function scaffoldCharm(charmName: string, targetDir: string): {
 // ── Extension ───────────────────────────────────────────────────────────────
 
 export default function (pi: ExtensionAPI) {
+  // ── Skill discovery ────────────────────────────────────────────────────
+
+  pi.on("resources_discover", async (_event, _ctx) => {
+    return {
+      skillPaths: [SKILLS_DIR],
+    };
+  });
+
   // ── /charm-init command ─────────────────────────────────────────────────
 
   pi.registerCommand("charm-init", {
@@ -142,7 +159,9 @@ export default function (pi: ExtensionAPI) {
     promptSnippet: "Initialize a new Juju charm project from a template",
     promptGuidelines: [
       "Use charm_init when the user asks to create a new Juju charm, initialize a charm project, or scaffold a charm.",
+      "Before calling charm_init, read /skill:quick-charm-workflow to determine which charm path (custom, 12-factor, infrastructure) is appropriate.",
       "After charm_init creates the files, review charmcraft.yaml and src/charm.py with the user to customize them.",
+      "Then use /skill:relations, /skill:operational-patterns, and /skill:observability to flesh out the charm.",
     ],
     parameters: Type.Object({
       name: Type.String({
@@ -475,6 +494,137 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // ── charm_test_integration tool ───────────────────────────────────────
+
+  pi.registerTool({
+    name: "charm_test_integration",
+    label: "Charm Integration Test",
+    description:
+      "Run integration tests for a Juju charm using `tox run -e integration`. " +
+      "Requires a Juju controller and model. See /skill:charm-testing for test patterns.",
+    promptSnippet: "Run integration tests for a Juju charm (requires Juju controller)",
+    promptGuidelines: [
+      "Use charm_test_integration when the user asks to run integration tests. These require a live Juju controller. Read /skill:charm-testing first for the test framework.",
+    ],
+    parameters: Type.Object({
+      directory: Type.Optional(
+        Type.String({
+          description: "Charm project directory. Defaults to current directory.",
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      const cwd = params.directory || ".";
+      const absDir = path.resolve(ctx.cwd, cwd);
+
+      onUpdate?.({ content: [{ type: "text", text: "Running integration tests..." }] });
+
+      try {
+        const output = execSync("tox run -e integration", {
+          cwd: absDir,
+          encoding: "utf-8",
+          timeout: 600_000, // 10 min
+          signal,
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Integration tests passed:\n${output.trim()}`,
+            },
+          ],
+          details: { output: output.trim() },
+        };
+      } catch (err: any) {
+        const stderr = err.stderr || err.message || String(err);
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Integration tests failed:\n${stderr}`,
+            },
+          ],
+          details: { error: "integration_failed", stderr },
+          isError: true,
+        };
+      }
+    },
+
+    renderResult(result, _options, theme, _context) {
+      const details = result.details as { error?: string } | undefined;
+      if (details?.error) {
+        return new Text(theme.fg("error", "✗ Integration tests failed"), 0, 0);
+      }
+      return new Text(theme.fg("success", "✓ Integration tests passed"), 0, 0);
+    },
+  });
+
+  // ── charm_help tool ───────────────────────────────────────────────────
+
+  pi.registerTool({
+    name: "charm_help",
+    label: "Charm Help",
+    description:
+      "List available charm-building skills and point to reference docs. " +
+      "Call this when the user asks 'how do I...' for charm development.",
+    promptSnippet: "Show available charm skills and reference documentation",
+    promptGuidelines: [
+      "Use charm_help when the user asks general questions about Juju charm development or wants to know what tools/skills are available.",
+      "After charm_help returns, use /skill:<name> to load a specific skill's full guidance into context.",
+    ],
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+      const skills = [
+        ["quick-charm-workflow", "End-to-end workflow: detect framework, scaffold, build, test, deploy"],
+        ["relations", "Designing and implementing relation data bags for charm integrations"],
+        ["charm-testing", "Unit tests with ops.testing (Scenario) and integration tests with Jubilant"],
+        ["observability", "Adding COS observability (metrics, logs, dashboards, tracing)"],
+        ["operational-patterns", "Actions, config validation, status, backup/restore, secrets"],
+        ["quality-review", "Security review and bug-hunting for charm code"],
+        ["debugging", "Systematic diagnosis, debug iteration, and jhack tooling"],
+      ];
+
+      let msg = "# Juju Charm Development Skills\n\n";
+      msg += "Load any skill with `/skill:<name>` to get full guidance.\n\n";
+      msg += "| Skill | Purpose |\n|-------|--------|\n";
+      for (const [name, desc] of skills) {
+        msg += `| \`${name}\` | ${desc} |\n`;
+      }
+      msg += "\n## Workflow Quick Reference\n\n";
+      msg += "1. **Start**: `/skill:quick-charm-workflow` — determine charm path, scaffold\n";
+      msg += "2. **Implement**: `/skill:relations`, `/skill:operational-patterns`, `/skill:observability`\n";
+      msg += "3. **Test**: `/skill:charm-testing` — Scenario unit tests + Jubilant integration tests\n";
+      msg += "4. **Review**: `/skill:quality-review` — security audit, bug hunt\n";
+      msg += "5. **Debug**: `/skill:debugging` — diagnose and fix issues\n";
+      msg += "\n## Tools Available\n\n";
+      msg += "- `charm_init` — scaffold a new charm project\n";
+      msg += "- `charm_build` — run `charmcraft pack`\n";
+      msg += "- `charm_lint` — run `tox run -e lint`\n";
+      msg += "- `charm_test_unit` — run `tox run -e unit`\n";
+      msg += "- `charm_test_integration` — run `tox run -e integration`\n";
+
+      return {
+        content: [{ type: "text", text: msg }],
+        details: {},
+      };
+    },
+
+    renderCall(_args, theme, _context) {
+      return new Text(
+        theme.fg("toolTitle", theme.bold("charm_help")),
+        0,
+        0,
+      );
+    },
+
+    renderResult(result, _options, _theme, _context) {
+      const text = result.content[0];
+      return new Text(text?.type === "text" ? "Charm skills listed" : "Done", 0, 0);
+    },
+  });
+
   // ── Session start ──────────────────────────────────────────────────────
 
   pi.on("session_start", async (_event, ctx) => {
@@ -482,7 +632,8 @@ export default function (pi: ExtensionAPI) {
       "juju-charm",
       [
         "  🪄 Juju Charm extension active",
-        "  /charm-init [name] · charm_init · charm_build · charm_lint · charm_test_unit",
+        "  /charm-init · charm_init · charm_build · charm_lint · charm_test_unit · charm_test_integration",
+        "  /skill:quick-charm-workflow · relations · charm-testing · observability · operational-patterns · quality-review · debugging",
       ],
     );
   });

@@ -29,10 +29,16 @@ repos:
         language: system
         types: [python]
         pass_filenames: false
+      - id: make-unit
+        name: make unit
+        entry: make unit
+        language: system
+        types: [python]
+        pass_filenames: false
 
 ci:
   # pre-commit.ci doesn't have uv/python 3.14 available, so skip the
   # make-driven hooks there. Our GitHub Actions CI runs them instead.
-  skip: [make-format, make-lint]
+  skip: [make-format, make-lint, make-unit]
   autofix_commit_msg: "style: auto-fix from pre-commit hooks"
   autoupdate_commit_msg: "chore: update pre-commit hooks"

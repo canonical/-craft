@@ -15,17 +15,17 @@ dashcraft = "dashcraft:main"
 dev = [
     "pytest>=8.3",
     "pytest-cov>=5.0",
-    "pyright>=1.1.409",
     "ruff>=0.11",
+    "ty>=0.0.35",
 ]
 
 [tool.ruff]
 line-length = 99
 target-version = "py314"
-extend-exclude = [".clones"]
+extend-exclude = [".clones", "src/quickpack", "src/pypi_attest"]
 
 [tool.ruff.format]
-quote-style = "single"
+quote-style = 'single'
 
 [tool.ruff.lint]
 select = [
@@ -90,6 +90,12 @@ reportUnknownMemberType = false
 reportUnknownParameterType = false
 reportUnknownVariableType = false
 reportMissingParameterType = false
+
+[tool.ty.src]
+include = ["src", "tests"]
+
+[tool.ty.environment]
+python-version = "3.14"
 
 [tool.pytest.ini_options]
 pythonpath = [
