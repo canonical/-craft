@@ -59,6 +59,14 @@ export interface WorkloadAnalysis {
   needsCache: boolean;
   isWebApp: boolean;
   extraPackages: string[];    // apt/system packages needed at runtime
+  hasHealthEndpoint: boolean;  // has a /health or /healthz endpoint
+  healthEndpoint: string;      // URL path to health endpoint, e.g. "/health"
+  hasK8sManifests: boolean;    // has Kubernetes deployment/service manifests
+  needsStorage: boolean;       // requires persistent storage
+  needsClustering: boolean;    // requires peer clustering / HA
+  hasRedis: boolean;           // specifically depends on Redis
+  hasPostgres: boolean;        // specifically depends on PostgreSQL
+  hasMySQL: boolean;           // specifically depends on MySQL
 }
 
 export function makeContext(charmName: string): CharmTemplateContext {
@@ -89,6 +97,14 @@ export function emptyAnalysis(name: string): WorkloadAnalysis {
     needsCache: false,
     isWebApp: false,
     extraPackages: [],
+    hasHealthEndpoint: false,
+    healthEndpoint: "",
+    hasK8sManifests: false,
+    needsStorage: false,
+    needsClustering: false,
+    hasRedis: false,
+    hasPostgres: false,
+    hasMySQL: false,
   };
 }
 
