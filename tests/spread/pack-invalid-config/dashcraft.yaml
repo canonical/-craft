@@ -1,0 +1,5 @@
+name: invalid-charm
+type: charm
+parts:
+  charm:
+    plugin: -craft

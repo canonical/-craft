@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from quickpack.pack import quick_pack
-
 from dashcraft.config import ConfigError, load_config
 from dashcraft.templates import get_files
-from dashcraft.upstream import CloneError, clone_upstream
-
-CONFIG_FILENAME = 'dashcraft.yaml'
+from dashcraft.upstream import CloneError, clone_upstream_persistent
+from quickpack.pack import quick_pack
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -26,42 +24,18 @@ def _build_parser() -> argparse.ArgumentParser:
         '--project-dir',
         type=Path,
         default=Path.cwd(),
-        help='Project directory containing dashcraft.yaml (default: CWD)',
+        help='Project directory containing dashcraft.yaml or -craft.yaml (default: CWD)',
     )
     subparsers = parser.add_subparsers(dest='command')
 
-    # pack command
-    subparsers.add_parser('pack', help='Generate and pack a charm for the upstream workload')
-
-    # charm-init command
-    init_parser = subparsers.add_parser(
-        'charm-init', help='Scaffold a new Juju charm from a template'
+    # pack — the only command
+    pack_parser = subparsers.add_parser(
+        'pack', help='Generate and pack a charm for the upstream workload'
     )
-    init_parser.add_argument('name', help='Charm name in kebab-case')
-    init_parser.add_argument(
-        '--workload',
-        default='',
-        help='OCI image reference for the workload (optional)',
-    )
-    init_parser.add_argument(
-        '--directory',
-        default='',
-        help='Target directory (default: ./<name>)',
-    )
-    init_parser.add_argument(
-        '--force',
+    pack_parser.add_argument(
+        '--keep-source',
         action='store_true',
-        help='Skip existing files instead of failing',
-    )
-
-    # lint command
-    subparsers.add_parser('lint', help='Lint the charm code (tox run -e lint)')
-
-    # test command
-    test_parser = subparsers.add_parser('test', help='Run charm tests')
-    test_parser.add_argument('--unit', action='store_true', help='Run unit tests only')
-    test_parser.add_argument(
-        '--integration', action='store_true', help='Run integration tests only'
+        help='Keep the cloned upstream source directory (do not clean up on exit)',
     )
 
     return parser
@@ -72,33 +46,20 @@ def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
 
-    if args.command is None:
+    if args.command != 'pack':
         parser.print_help()
         return 1
 
-    if args.command == 'pack':
-        return _cmd_pack(args)
-
-    if args.command == 'charm-init':
-        return _cmd_charm_init(args)
-
-    if args.command == 'lint':
-        return _cmd_lint(args)
-
-    if args.command == 'test':
-        return _cmd_test(args)
-
-    parser.print_help()
-    return 1
+    return _cmd_pack(args)
 
 
 def _cmd_pack(args: argparse.Namespace) -> int:
-    """Execute the 'pack' command."""
-    config_path = args.project_dir / CONFIG_FILENAME
-    print(f'Project directory: {args.project_dir}')
+    """Execute the 'pack' command — scaffold and pack."""
+    project_dir = args.project_dir
 
+    # Step 1: Load config
     try:
-        config = load_config(config_path)
+        config = load_config(project_dir)
     except ConfigError as e:
         print(f'Error: {e}', file=sys.stderr)
         return 1
@@ -108,20 +69,54 @@ def _cmd_pack(args: argparse.Namespace) -> int:
 
     print(f"Packing charm '{config.name}' from upstream: {charm_part.upstream}")
 
+    # Step 2: Clone upstream
     try:
-        with clone_upstream(charm_part.upstream) as source_dir:
+        if args.keep_source:
+            source_dir = clone_upstream_persistent(charm_part.upstream)
             print(f'Cloned upstream to: {source_dir}')
-            print('Upstream source ready. (Charm generation not yet implemented.)')
-
-            if (args.project_dir / 'charmcraft.yaml').exists():
-                print('Found charmcraft.yaml — running quickpack...')
-                return _run_quickpack(args.project_dir)
-
+            print('(--keep-source: directory will not be cleaned up)')
+        else:
+            source_dir = clone_upstream_persistent(charm_part.upstream)
+            print(f'Cloned upstream to: {source_dir}')
     except CloneError as e:
         print(f'Error: {e}', file=sys.stderr)
         return 1
 
+    # TODO: Analyze source, generate charm
+    print('Upstream source ready. (Charm generation not yet implemented.)')
+
+    # Step 3: Scaffold charm files if charmcraft.yaml doesn't exist
+    if not (project_dir / 'charmcraft.yaml').exists():
+        scaffold_ret = _do_scaffold(project_dir, config.name, charm_part.workload)
+        if scaffold_ret != 0:
+            _cleanup_source(source_dir, args.keep_source)
+            return scaffold_ret
+
+    # Step 4: Check that pi is installed (required for charm generation)
+    ret = _check_pi_installed()
+    if ret != 0:
+        _cleanup_source(source_dir, args.keep_source)
+        return ret
+
+    # TODO: Start pi in RPC mode and generate charm code
+    print('pi is ready. AI charm generation coming soon.')
+
+    _cleanup_source(source_dir, args.keep_source)
     return 0
+
+    # Step 5: Pack (unreachable for now — future work)
+    print('Packing charm...')
+    pack_ret = _run_quickpack(project_dir)
+
+    _cleanup_source(source_dir, args.keep_source)
+
+    return pack_ret
+
+
+def _cleanup_source(source_dir: Path, keep: bool) -> None:
+    """Clean up the cloned upstream source unless --keep-source was given."""
+    if not keep:
+        shutil.rmtree(source_dir, ignore_errors=True)
 
 
 def _run_quickpack(cwd: Path) -> int:
@@ -132,55 +127,19 @@ def _run_quickpack(cwd: Path) -> int:
         return 0
     except (FileNotFoundError, ValueError, RuntimeError, OSError) as e:
         print(f'quickpack failed: {e}', file=sys.stderr)
-        print('Falling back to charmcraft pack...')
-        return _run_charmcraft_pack(cwd)
-
-
-def _run_charmcraft_pack(cwd: Path) -> int:
-    """Run charmcraft pack in the given directory as a fallback."""
-    charmcraft = shutil.which('charmcraft')
-    if not charmcraft:
-        print(
-            'Error: charmcraft is not installed. '
-            'Install it with: sudo snap install charmcraft --classic',
-            file=sys.stderr,
-        )
-        return 1
-
-    try:
-        subprocess.run(
-            [charmcraft, 'pack'],
-            cwd=cwd,
-            check=True,
-        )
-        return 0
-    except subprocess.CalledProcessError as e:
-        print(f'charmcraft pack failed: {e}', file=sys.stderr)
         return 1
 
 
-def _cmd_charm_init(args: argparse.Namespace) -> int:
-    """Execute the 'charm-init' command."""
-    name = args.name.strip()
-    if not name or not _is_valid_kebab_case(name):
+def _do_scaffold(project_dir: Path, name: str, workload_image: str = '') -> int:
+    """Scaffold charm files from templates into the project directory."""
+    if not _is_valid_kebab_case(name):
         print(
             f'Error: Invalid charm name "{name}". Use kebab-case (e.g. "my-app").',
             file=sys.stderr,
         )
         return 1
 
-    subdir = args.directory.strip() or f'./{name}'
-    target_dir = Path.cwd() / subdir
-    workload_image = args.workload.strip() if args.workload else ''
-
-    if target_dir.exists() and any(target_dir.iterdir()) and not args.force:
-        print(
-            f'Error: Directory "{subdir}" already contains files. '
-            'Use --force to skip existing files, or choose a different directory.',
-            file=sys.stderr,
-        )
-        return 1
-
+    target_dir = project_dir
     target_dir.mkdir(parents=True, exist_ok=True)
 
     files = get_files(name, workload_image)
@@ -196,17 +155,67 @@ def _cmd_charm_init(args: argparse.Namespace) -> int:
             full_path.write_text(content, encoding='utf-8')
             created.append(rel_path)
 
-    print(f'Charm "{name}" scaffolded in {subdir}.')
+    print(f'Scaffolded charm "{name}" into {project_dir}.')
     if created:
-        print(f'\nCreated {len(created)} files:')
+        print(f'Created {len(created)} files:')
         for f in created:
             print(f'  ✓ {f}')
     if skipped:
-        print(f'\nSkipped {len(skipped)} existing files:')
+        print(f'Skipped {len(skipped)} existing files:')
         for f in skipped:
             print(f'  - {f}')
-    print('\nNext: review charmcraft.yaml and src/charm.py, then run `dashcraft pack` to build.')
 
+    # Run uv lock to create uv.lock for the generated pyproject.toml
+    uv = shutil.which('uv')
+    if uv:
+        try:
+            subprocess.run(
+                [uv, 'lock'], cwd=project_dir, check=True, capture_output=True, text=True
+            )
+            print('Created uv.lock')
+        except subprocess.CalledProcessError as e:
+            print(f'Warning: uv lock failed: {e.stderr.strip()}', file=sys.stderr)
+    else:
+        print('Warning: uv not found — skipping uv.lock generation', file=sys.stderr)
+
+    return 0
+
+
+def _check_pi_installed() -> int:
+    """Check that pi is installed and an API key is set."""
+    pi_path = shutil.which('pi')
+    if not pi_path:
+        print("Error: 'pi' is not installed.", file=sys.stderr)
+        print(
+            'Install it with:\n  sudo npm install -g @earendil-works/pi-coding-agent',
+            file=sys.stderr,
+        )
+        return 1
+
+    # Check for at least one known API key env var
+    known_keys = {
+        'ANTHROPIC_API_KEY',
+        'OPENAI_API_KEY',
+        'GEMINI_API_KEY',
+        'AZURE_OPENAI_API_KEY',
+        'DEEPSEEK_API_KEY',
+        'GROQ_API_KEY',
+        'MISTRAL_API_KEY',
+        'OPENROUTER_API_KEY',
+        'FIREWORKS_API_KEY',
+    }
+    if not any(os.environ.get(k) for k in known_keys):
+        print('Error: No API key found for pi.', file=sys.stderr)
+        print(
+            'Set one of the supported API key environment variables, e.g.:\n'
+            '  export GEMINI_API_KEY=<your-key>\n'
+            '  export ANTHROPIC_API_KEY=<your-key>',
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f'Found pi at {pi_path}')
+    print('API key configured.')
     return 0
 
 
@@ -218,53 +227,3 @@ def _is_valid_kebab_case(name: str) -> bool:
         return False
     allowed = set('abcdefghijklmnopqrstuvwxyz0123456789-')
     return all(c in allowed for c in name)
-
-
-def _cmd_lint(args: argparse.Namespace) -> int:
-    """Execute the 'lint' command."""
-    cwd = args.project_dir
-
-    tox = shutil.which('tox')
-    if not tox:
-        print(
-            'Error: tox is not installed. Install it with: uv tool install tox',
-            file=sys.stderr,
-        )
-        return 1
-
-    try:
-        subprocess.run(
-            [tox, 'run', '-e', 'lint'],
-            cwd=cwd,
-            check=True,
-        )
-        return 0
-    except subprocess.CalledProcessError as e:
-        print(f'Lint failed: {e}', file=sys.stderr)
-        return 1
-
-
-def _cmd_test(args: argparse.Namespace) -> int:
-    """Execute the 'test' command."""
-    cwd = args.project_dir
-
-    tox = shutil.which('tox')
-    if not tox:
-        print(
-            'Error: tox is not installed. Install it with: uv tool install tox',
-            file=sys.stderr,
-        )
-        return 1
-
-    env = 'unit' if args.unit else 'integration' if args.integration else 'unit'
-
-    try:
-        subprocess.run(
-            [tox, 'run', '-e', env],
-            cwd=cwd,
-            check=True,
-        )
-        return 0
-    except subprocess.CalledProcessError as e:
-        print(f'Tests failed: {e}', file=sys.stderr)
-        return 1

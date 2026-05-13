@@ -78,6 +78,10 @@ convention = "google"
     # Line too long
     "E501",
 ]
+"src/dashcraft/templates.py" = [
+    # Long generated template strings
+    "E501",
+]
 
 [tool.pyright]
 include = ['src', 'tests']

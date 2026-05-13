@@ -1,5 +1,9 @@
 /**
- * Juju Charm templates - mirroring `charmcraft init --profile kubernetes`.
+ * Juju Charm templates — mirroring `charmcraft init --profile kubernetes`.
+ *
+ * Two modes:
+ *   1.  Skeleton — placeholder files where key fields need filling
+ *   2.  Filled  — fully populated from workload research
  *
  * All templates use `{charm_name}` (kebab-case), `{class_name}` (PascalCase + Charm),
  * and `{module_name}` (snake_case) for interpolation.
@@ -37,6 +41,26 @@ export interface CharmTemplateContext {
   title: string;        // Title Case, e.g. "My App"
 }
 
+/** Results from workload analysis used to fill templates. */
+export interface WorkloadAnalysis {
+  name: string;               // detected workload name
+  summary: string;            // one-line summary (from README or detected)
+  description: string;        // multi-paragraph description
+  language: string;           // "python" | "go" | "nodejs" | "rust" | "unknown"
+  framework: string;          // "flask" | "django" | "fastapi" | "express" | "spring" | "none"
+  command: string;            // startup command, e.g. "/usr/bin/my-app" or "python -m flask run"
+  port: number;               // primary HTTP port
+  envVars: Record<string, string>; // env vars with default values
+  hasDockerfile: boolean;
+  hasDockerCompose: boolean;
+  dockerExposePorts: number[];
+  dockerCmdHint: string;      // CMD / ENTRYPOINT from Dockerfile if found
+  needsDatabase: boolean;
+  needsCache: boolean;
+  isWebApp: boolean;
+  extraPackages: string[];    // apt/system packages needed at runtime
+}
+
 export function makeContext(charmName: string): CharmTemplateContext {
   return {
     charmName,
@@ -46,7 +70,380 @@ export function makeContext(charmName: string): CharmTemplateContext {
   };
 }
 
-// ── File templates ──────────────────────────────────────────────────────────
+/** Default empty analysis to signal we haven't researched yet. */
+export function emptyAnalysis(name: string): WorkloadAnalysis {
+  return {
+    name,
+    summary: "",
+    description: "",
+    language: "unknown",
+    framework: "none",
+    command: "/bin/foo  # TODO: set startup command",
+    port: 8080,
+    envVars: {},
+    hasDockerfile: false,
+    hasDockerCompose: false,
+    dockerExposePorts: [],
+    dockerCmdHint: "",
+    needsDatabase: false,
+    needsCache: false,
+    isWebApp: false,
+    extraPackages: [],
+  };
+}
+
+// ── Skeleton templates (placeholders, key fields not filled) ────────────────
+
+export function skeletonCharmcraftYaml(ctx: CharmTemplateContext): string {
+  return [
+    "# This file configures Charmcraft.",
+    "# See https://documentation.ubuntu.com/charmcraft/stable/reference/files/charmcraft-yaml-file/",
+    "type: charm",
+    `name: ${ctx.charmName}`,
+    `title: ${ctx.title} Charm`,
+    "summary: TODO: A very short one-line summary of the charm.",
+    "description: |",
+    "  TODO: A single sentence that says what the charm is, concisely and memorably.",
+    "",
+    "  TODO: A paragraph of one to three short sentences, that describe what the charm does.",
+    "",
+    "  TODO: A third paragraph that explains what need the charm meets.",
+    "",
+    "  TODO: Finally, a paragraph that describes whom the charm is useful for.",
+    "",
+    "# Documentation:",
+    "# https://documentation.ubuntu.com/charmcraft/stable/howto/build-guides/select-platforms/",
+    "base: ubuntu@22.04  # TODO: confirm base",
+    "platforms:",
+    "  amd64:",
+    "  arm64:",
+    "",
+    "parts:",
+    "  charm:",
+    "    plugin: uv",
+    "    source: .",
+    "    build-snaps:",
+    "      - astral-uv",
+    "",
+    "# TODO: fill in config options based on workload",
+    "config:",
+    "  options:",
+    "    log-level:",
+    "      description: |",
+    '        Configures the log level of the workload.',
+    "",
+    '        Acceptable values are: "info", "debug", "warning", "error" and "critical"',
+    '      default: "info"',
+    "      type: string",
+    "",
+    "# TODO: set container and resource names based on workload",
+    "containers:",
+    "  workload:",
+    "    resource: workload-image",
+    "",
+    "resources:",
+    "  workload-image:",
+    "    type: oci-image",
+    "    description: OCI image for the workload container",
+    "    upstream-source: TODO: workload-image:tag",
+    "",
+  ].join("\n");
+}
+
+/** Generate a filled charmcraft.yaml from workload analysis. */
+export function filledCharmcraftYaml(ctx: CharmTemplateContext, analysis: WorkloadAnalysis): string {
+  const parts: string[] = [];
+  parts.push("# This file configures Charmcraft.");
+  parts.push("# See https://documentation.ubuntu.com/charmcraft/stable/reference/files/charmcraft-yaml-file/");
+  parts.push("type: charm");
+  parts.push(`name: ${ctx.charmName}`);
+  parts.push(`title: ${ctx.title} Charm`);
+  parts.push(`summary: ${analysis.summary || "Charm for " + ctx.title}`);
+  parts.push("description: |");
+  for (const line of (analysis.description || `A Juju charm for deploying and operating ${ctx.title}.`).split("\n")) {
+    parts.push(`  ${line}`);
+  }
+  parts.push("");
+  parts.push("base: ubuntu@22.04");
+  parts.push("platforms:");
+  parts.push("  amd64:");
+  parts.push("  arm64:");
+  parts.push("");
+  parts.push("parts:");
+  parts.push("  charm:");
+  parts.push("    plugin: uv");
+  parts.push("    source: .");
+  parts.push("    build-snaps:");
+  parts.push("      - astral-uv");
+  parts.push("");
+
+  // Config
+  parts.push("config:");
+  parts.push("  options:");
+  parts.push("    log-level:");
+  parts.push("      description: |");
+  parts.push('        Configures the log level of the workload.');
+  parts.push('        Acceptable values are: "info", "debug", "warning", "error" and "critical"');
+  parts.push('      default: "info"');
+  parts.push("      type: string");
+  if (analysis.port && analysis.port !== 8080) {
+    parts.push("    port:");
+    parts.push("      description: The port the workload listens on.");
+    parts.push(`      default: ${analysis.port}`);
+    parts.push("      type: int");
+  }
+  // Add detected env vars as config options
+  for (const [key, val] of Object.entries(analysis.envVars)) {
+    const configKey = key.toLowerCase().replace(/_/g, "-");
+    parts.push(`    ${configKey}:`);
+    parts.push(`      description: Sets the ${key} environment variable.`);
+    parts.push(`      default: "${val}"`);
+    parts.push("      type: string");
+  }
+  parts.push("");
+
+  // Relations
+  if (analysis.needsDatabase) {
+    parts.push("requires:");
+    parts.push("  database:");
+    parts.push("    interface: postgresql_client");
+    parts.push("");
+  }
+  if (analysis.isWebApp) {
+    parts.push("provides:");
+    parts.push("  ingress:");
+    parts.push("    interface: ingress");
+    parts.push("");
+  }
+
+  // Containers
+  parts.push("containers:");
+  parts.push("  workload:");
+  parts.push("    resource: workload-image");
+  parts.push("");
+  parts.push("resources:");
+  parts.push("  workload-image:");
+  parts.push("    type: oci-image");
+  parts.push("    description: OCI image for the workload container");
+  parts.push(`    upstream-source: ${analysis.name}:latest  # TODO: confirm image tag`);
+  parts.push("");
+
+  return parts.join("\n");
+}
+
+/** Generate a skeleton src/charm.py with placeholders. */
+export function skeletonSrcCharmPy(ctx: CharmTemplateContext): string {
+  return [
+    "#!/usr/bin/env python3",
+    "# Copyright 2026 Ubuntu",
+    "# See LICENSE file for licensing details.",
+    "",
+    '"""Charm the application."""',
+    "",
+    "import logging",
+    "import time",
+    "",
+    "import ops",
+    "",
+    `import ${ctx.moduleName}`,
+    "",
+    "logger = logging.getLogger(__name__)",
+    "",
+    'SERVICE_NAME = "workload"',
+    "",
+    "",
+    `class ${ctx.className}(ops.CharmBase):`,
+    '    """Charm the application."""',
+    "",
+    "    def __init__(self, framework: ops.Framework):",
+    "        super().__init__(framework)",
+    '        framework.observe(self.on["workload"].pebble_ready, self._on_pebble_ready)',
+    '        self.container = self.unit.get_container("workload")',
+    "",
+    "    def _on_pebble_ready(self, event: ops.PebbleReadyEvent):",
+    '        """Handle pebble-ready event."""',
+    '        self.unit.status = ops.MaintenanceStatus("starting workload")',
+    "        layer: ops.pebble.LayerDict = {",
+    '            "services": {',
+    "                SERVICE_NAME: {",
+    '                    "override": "replace",',
+    '                    "summary": "TODO: describe the workload service",',
+    '                    "command": "/bin/foo  # TODO: change to the actual startup command",',
+    '                    "startup": "enabled",',
+    "                }",
+    "            }",
+    "        }",
+    '        self.container.add_layer("workload", layer, combine=True)',
+    "        self.container.replan()",
+    "        self.wait_for_ready()",
+    `        version = ${ctx.moduleName}.get_version()`,
+    "        if version is not None:",
+    "            self.unit.set_workload_version(version)",
+    "        self.unit.status = ops.ActiveStatus()",
+    "",
+    "    def is_ready(self) -> bool:",
+    '        """Check whether the workload is ready to use."""',
+    "        for name, service_info in self.container.get_services().items():",
+    "            if not service_info.is_running():",
+    "                logger.info(\"the workload is not ready (service '%s' is not running)\", name)",
+    "                return False",
+    "        checks = self.container.get_checks(level=ops.pebble.CheckLevel.READY)",
+    "        for check_info in checks.values():",
+    "            if check_info.status != ops.pebble.CheckStatus.UP:",
+    "                return False",
+    "        return True",
+    "",
+    "    def wait_for_ready(self) -> None:",
+    '        """Wait for the workload to be ready to use."""',
+    "        for _ in range(3):",
+    "            if self.is_ready():",
+    "                return",
+    "            time.sleep(1)",
+    '        logger.error("the workload was not ready within the expected time")',
+    '        raise RuntimeError("workload is not ready")',
+    "",
+    "",
+    'if __name__ == "__main__":  # pragma: nocover',
+    `    ops.main(${ctx.className})`,
+    "",
+  ].join("\n");
+}
+
+/** Generate a filled src/charm.py from workload analysis. */
+export function filledSrcCharmPy(ctx: CharmTemplateContext, analysis: WorkloadAnalysis): string {
+  const lines: string[] = [];
+  lines.push("#!/usr/bin/env python3");
+  lines.push("# Copyright 2026 Ubuntu");
+  lines.push("# See LICENSE file for licensing details.");
+  lines.push("");
+  lines.push('"""Charm for ' + ctx.title + '."""');
+  lines.push("");
+  lines.push("import logging");
+  lines.push("import time");
+  lines.push("");
+  lines.push("import ops");
+  lines.push("");
+  lines.push(`import ${ctx.moduleName}`);
+  lines.push("");
+  lines.push("logger = logging.getLogger(__name__)");
+  lines.push("");
+  lines.push('SERVICE_NAME = "workload"');
+  lines.push("");
+  lines.push("");
+  lines.push(`class ${ctx.className}(ops.CharmBase):`);
+  lines.push(`    """Charm for ${ctx.title}."""`);
+  lines.push("");
+  lines.push("    def __init__(self, framework: ops.Framework):");
+  lines.push("        super().__init__(framework)");
+  lines.push('        framework.observe(self.on["workload"].pebble_ready, self._on_pebble_ready)');
+  lines.push('        self.container = self.unit.get_container("workload")');
+
+  if (analysis.needsDatabase) {
+    lines.push('        framework.observe(self.on.database_relation_changed, self._on_database_changed)');
+  }
+  if (analysis.isWebApp) {
+    lines.push('        framework.observe(self.on.ingress_relation_joined, self._on_ingress_joined)');
+  }
+  lines.push("");
+
+  // _on_pebble_ready
+  lines.push("    def _on_pebble_ready(self, event: ops.PebbleReadyEvent):");
+  lines.push('        """Handle pebble-ready event."""');
+  lines.push('        self.unit.status = ops.MaintenanceStatus("starting workload")');
+
+  // Build env map
+  if (analysis.envVars && Object.keys(analysis.envVars).length > 0) {
+    lines.push("        env = {");
+    for (const [key, _val] of Object.entries(analysis.envVars)) {
+      const configKey = key.toLowerCase().replace(/_/g, "-");
+      lines.push(`            "${key}": self.config.get("${configKey}", "${_val}"),`);
+    }
+    lines.push("        }");
+  }
+
+  lines.push("        layer: ops.pebble.LayerDict = {");
+  lines.push('            "services": {');
+  lines.push("                SERVICE_NAME: {");
+  lines.push('                    "override": "replace",');
+  lines.push(`                    "summary": "${ctx.title} service",`);
+  lines.push(`                    "command": "${analysis.command}",`);
+  lines.push('                    "startup": "enabled",');
+  if (analysis.envVars && Object.keys(analysis.envVars).length > 0) {
+    lines.push('                    "environment": env,');
+  }
+  lines.push("                }");
+  lines.push("            }");
+  if (analysis.port) {
+    lines.push('            "checks": {');
+    lines.push('                "ready": {');
+    lines.push('                    "override": "replace",');
+    lines.push('                    "level": "ready",');
+    lines.push('                    "http": {');
+    lines.push(`                        "url": "http://localhost:${analysis.port}",`);
+    lines.push("                    }");
+    lines.push("                }");
+    lines.push("            }");
+  }
+  lines.push("        }");
+  lines.push('        self.container.add_layer("workload", layer, combine=True)');
+  lines.push("        self.container.replan()");
+  lines.push("        self.wait_for_ready()");
+  lines.push(`        version = ${ctx.moduleName}.get_version()`);
+  lines.push("        if version is not None:");
+  lines.push("            self.unit.set_workload_version(version)");
+  lines.push("        self.unit.status = ops.ActiveStatus()");
+  lines.push("");
+
+  // Relations
+  if (analysis.needsDatabase) {
+    lines.push("    def _on_database_changed(self, event: ops.RelationChangedEvent) -> None:");
+    lines.push('        """Handle database relation changes."""');
+    lines.push("        if not event.relation.data.get(event.app):");
+    lines.push("            return");
+    lines.push("        # TODO: configure workload with database credentials");
+    lines.push("");
+  }
+
+  if (analysis.isWebApp) {
+    lines.push("    def _on_ingress_joined(self, event: ops.RelationJoinedEvent) -> None:");
+    lines.push('        """Handle ingress relation."""');
+    lines.push("        if not self.unit.is_leader():");
+    lines.push("            return");
+    lines.push('        event.relation.data[self.app]["url"] = f"http://{self.app.name}:{str(self.config.get("port", ' + String(analysis.port) + '))}"');
+    lines.push("");
+  }
+
+  // Readiness helpers
+  lines.push("    def is_ready(self) -> bool:");
+  lines.push('        """Check whether the workload is ready to use."""');
+  lines.push("        for name, service_info in self.container.get_services().items():");
+  lines.push("            if not service_info.is_running():");
+  lines.push("                logger.info(\"the workload is not ready (service '%s' is not running)\", name)");
+  lines.push("                return False");
+  lines.push("        checks = self.container.get_checks(level=ops.pebble.CheckLevel.READY)");
+  lines.push("        for check_info in checks.values():");
+  lines.push("            if check_info.status != ops.pebble.CheckStatus.UP:");
+  lines.push("                return False");
+  lines.push("        return True");
+  lines.push("");
+  lines.push("    def wait_for_ready(self) -> None:");
+  lines.push('        """Wait for the workload to be ready to use."""');
+  lines.push("        for _ in range(3):");
+  lines.push("            if self.is_ready():");
+  lines.push("                return");
+  lines.push("            time.sleep(1)");
+  lines.push('        logger.error("the workload was not ready within the expected time")');
+  lines.push('        raise RuntimeError("workload is not ready")');
+  lines.push("");
+  lines.push("");
+  lines.push('if __name__ == "__main__":  # pragma: nocover');
+  lines.push(`    ops.main(${ctx.className})`);
+  lines.push("");
+
+  return lines.join("\n");
+}
+
+// ── File templates (original, full scaffold) ────────────────────────────────
 
 export function gitignore(): string {
   return [
@@ -846,7 +1243,7 @@ export function toxIni(_ctx: CharmTemplateContext): string {
 }
 
 /**
- * All file entries for a charm project.
+ * All file entries for a charm project (full scaffold).
  * Each entry is [relativePath, content].
  */
 export function allFiles(ctx: CharmTemplateContext): Array<[string, string]> {
@@ -859,6 +1256,54 @@ export function allFiles(ctx: CharmTemplateContext): Array<[string, string]> {
     ["pyproject.toml", pyprojectToml(ctx)],
     ["tox.ini", toxIni(ctx)],
     [`src/charm.py`, srcCharmPy(ctx)],
+    [`src/${ctx.moduleName}.py`, srcWorkloadPy(ctx)],
+    ["tests/__init__.py", ""],
+    ["tests/unit/__init__.py", ""],
+    ["tests/unit/test_charm.py", unitTestCharm(ctx)],
+    ["tests/integration/__init__.py", ""],
+    ["tests/integration/conftest.py", integrationConfTest(ctx)],
+    ["tests/integration/test_charm.py", integrationTestCharm(ctx)],
+  ];
+}
+
+/**
+ * Skeleton file entries — same scaffold but charmcraft.yaml and src/charm.py
+ * use placeholder versions with TODO markers.
+ */
+export function skeletonFiles(ctx: CharmTemplateContext): Array<[string, string]> {
+  return [
+    [".gitignore", gitignore()],
+    ["CONTRIBUTING.md", contributing()],
+    ["LICENSE", license()],
+    ["README.md", readme(ctx)],
+    ["charmcraft.yaml", skeletonCharmcraftYaml(ctx)],
+    ["pyproject.toml", pyprojectToml(ctx)],
+    ["tox.ini", toxIni(ctx)],
+    [`src/charm.py`, skeletonSrcCharmPy(ctx)],
+    [`src/${ctx.moduleName}.py`, srcWorkloadPy(ctx)],
+    ["tests/__init__.py", ""],
+    ["tests/unit/__init__.py", ""],
+    ["tests/unit/test_charm.py", unitTestCharm(ctx)],
+    ["tests/integration/__init__.py", ""],
+    ["tests/integration/conftest.py", integrationConfTest(ctx)],
+    ["tests/integration/test_charm.py", integrationTestCharm(ctx)],
+  ];
+}
+
+/**
+ * Filled file entries — same scaffold but charmcraft.yaml and src/charm.py
+ * are generated from workload analysis results.
+ */
+export function filledFiles(ctx: CharmTemplateContext, analysis: WorkloadAnalysis): Array<[string, string]> {
+  return [
+    [".gitignore", gitignore()],
+    ["CONTRIBUTING.md", contributing()],
+    ["LICENSE", license()],
+    ["README.md", readme(ctx)],
+    ["charmcraft.yaml", filledCharmcraftYaml(ctx, analysis)],
+    ["pyproject.toml", pyprojectToml(ctx)],
+    ["tox.ini", toxIni(ctx)],
+    [`src/charm.py`, filledSrcCharmPy(ctx, analysis)],
     [`src/${ctx.moduleName}.py`, srcWorkloadPy(ctx)],
     ["tests/__init__.py", ""],
     ["tests/unit/__init__.py", ""],

@@ -1,0 +1,10 @@
+name: colibri-social
+summary: Colibri.social charm
+description: A charm for Colibri.social.
+type: charm
+
+parts:
+  charm:
+    plugin: -craft
+    upstream: https://github.com/colibri-social/colibri.social.git
+    workload: ghcr.io/colibri-social/colibri:latest

@@ -1,16 +1,31 @@
-summary: Scaffold, pack, and deploy an IronCalc charm
-# Upstream: https://github.com/ironcalc/IronCalc
+summary: Pack an IronCalc charm and verify contents
 systems:
   - ubuntu-24.04
 
-environment:
-  NAME: ironcalc
-  WORKLOAD_IMAGE: ghcr.io/ironcalc/ironcalc:latest
-
 execute: |
-  source "$SPREAD_PATH/tests/spread/charm-helpers.sh"
-  pack_and_deploy
+  local work_dir="/root/work-ironcalc"
+  rm -rf "$work_dir"
+  mkdir -p "$work_dir"
+  cp "$SPREAD_PATH/tests/spread/pack-ironcalc/dashcraft.yaml" "$work_dir/dashcraft.yaml"
 
-restore: |
-  source "$SPREAD_PATH/tests/spread/charm-helpers.sh"
-  cleanup
+  dashcraft pack --project-dir "$work_dir"
+
+  local charm_file
+  charm_file="$(ls -1 "$work_dir"/*.charm 2>/dev/null | head -n1)"
+  [[ -n "$charm_file" ]] || { echo "FAIL: no .charm produced" >&2; exit 1; }
+  echo "Packed: $charm_file"
+
+  local verify_dir="$work_dir/verify"
+  mkdir -p "$verify_dir"
+  unzip -q "$charm_file" -d "$verify_dir"
+
+  for f in metadata.yaml src/charm.py; do
+    if [[ ! -f "$verify_dir/$f" ]]; then
+      echo "FAIL: $f not found in charm" >&2
+      rm -rf "$work_dir"
+      exit 1
+    fi
+  done
+  echo "Charm verification passed"
+
+  rm -rf "$work_dir"

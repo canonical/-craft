@@ -3,18 +3,12 @@ systems:
   - ubuntu-24.04
 
 execute: |
+  # The sibling dashcraft.yaml is missing the required 'upstream' field in
+  # the charm part.
   local work_dir="/root/work-invalid-config"
   rm -rf "$work_dir"
   mkdir -p "$work_dir"
-
-  # Missing required 'upstream' field in the charm part.
-  cat > "$work_dir/dashcraft.yaml" << 'EOF'
-  name: invalid-charm
-  type: charm
-  parts:
-    charm:
-      plugin: -craft
-  EOF
+  cp "$SPREAD_PATH/tests/spread/pack-invalid-config/dashcraft.yaml" "$work_dir/dashcraft.yaml"
 
   rc=0
   OUTPUT="$(dashcraft pack --project-dir "$work_dir" 2>&1)" || rc=$?
