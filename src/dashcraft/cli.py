@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import os
 import shutil
 import subprocess
@@ -95,31 +94,9 @@ def _build_parser(prog: str = 'dashcraft') -> argparse.ArgumentParser:
     return parser
 
 
-def _ensure_craft_symlink(prog: str) -> None:
-    """Auto-create the `-craft` symlink next to the dashcraft script on first run.
-
-    This ensures that after a fresh install, `-craft pack` works alongside
-    `dashcraft pack` without needing a manual `make craft-symlink`.
-    """
-    if prog != 'dashcraft':
-        return  # Already invoked as -craft or something else, nothing to do
-
-    dashcraft_bin = Path(sys.argv[0])
-    if not dashcraft_bin.is_file():
-        return  # Can't find the script, bail
-
-    craft_symlink = dashcraft_bin.with_name('-craft')
-    if craft_symlink.exists() or craft_symlink.is_symlink():
-        return  # Already exists
-
-    with contextlib.suppress(OSError):
-        craft_symlink.symlink_to(dashcraft_bin.name)
-
-
 def main() -> int:
     """Entry point for the dashcraft CLI (also works as `-craft`)."""
     prog = os.path.basename(sys.argv[0])
-    _ensure_craft_symlink(prog)
     parser = _build_parser(prog)
     args = parser.parse_args()
 
