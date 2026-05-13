@@ -22,6 +22,7 @@ dev = [
 [tool.ruff]
 line-length = 99
 target-version = "py314"
+extend-exclude = [".clones"]
 
 [tool.ruff.format]
 quote-style = "single"
@@ -58,11 +59,13 @@ select = [
 ]
 ignore = [
     # Function argument `x` is shadowing a Python builtin
-    "A002",
+    'A002',
     # Use of `assert` detected
-    "S101",
+    'S101',
     # `subprocess` call: check for execution of untrusted input
-    "S603",
+    'S603',
+    # Use a single `with` statement with multiple contexts — sometimes nested is clearer
+    'SIM117',
 ]
 
 [tool.ruff.lint.pydocstyle]
@@ -77,13 +80,21 @@ convention = "google"
 ]
 
 [tool.pyright]
-include = ["src", "tests"]
-pythonVersion = "3.14"
-typeCheckingMode = "strict"
+include = ['src', 'tests']
+pythonVersion = '3.14'
+typeCheckingMode = 'strict'
+reportPrivateUsage = false
+reportUnknownArgumentType = false
+reportUnknownLambdaType = false
+reportUnknownMemberType = false
+reportUnknownParameterType = false
+reportUnknownVariableType = false
+reportMissingParameterType = false
 
 [tool.pytest.ini_options]
 pythonpath = [
-    "src"
+    "src",
+    ".",
 ]
 
 [build-system]

@@ -5,13 +5,13 @@ from __future__ import annotations
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator
 
 
 @contextmanager
-def clone_upstream(upstream_url: str, *, depth: int = 1) -> Generator[Path, None, None]:
+def clone_upstream(upstream_url: str, *, depth: int = 1) -> Generator[Path]:
     """Clone an upstream git repository into a temporary directory.
 
     The temporary directory is cleaned up when the context manager exits.
@@ -26,7 +26,7 @@ def clone_upstream(upstream_url: str, *, depth: int = 1) -> Generator[Path, None
     Raises:
         CloneError: If the git clone operation fails.
     """
-    tmp_dir = Path(tempfile.mkdtemp(prefix="dashcraft-upstream-"))
+    tmp_dir = Path(tempfile.mkdtemp(prefix='dashcraft-upstream-'))
     try:
         _git_clone(upstream_url, tmp_dir, depth=depth)
         yield tmp_dir
@@ -53,7 +53,7 @@ def clone_upstream_persistent(
         CloneError: If the git clone operation fails.
     """
     if dest is None:
-        dest = Path(tempfile.mkdtemp(prefix="dashcraft-upstream-"))
+        dest = Path(tempfile.mkdtemp(prefix='dashcraft-upstream-'))
     else:
         dest = Path(dest)
         dest.mkdir(parents=True, exist_ok=True)
@@ -64,15 +64,15 @@ def clone_upstream_persistent(
 
 def _ensure_git_available() -> None:
     """Check that git is installed and accessible."""
-    if not shutil.which("git"):
-        raise CloneError("git is not installed or not found in PATH")
+    if not shutil.which('git'):
+        raise CloneError('git is not installed or not found in PATH')
 
 
 def _git_clone(url: str, dest: Path, *, depth: int = 1) -> None:
     """Execute git clone with the given parameters."""
     _ensure_git_available()
 
-    cmd = ["git", "clone", "--depth", str(depth)]
+    cmd = ['git', 'clone', '--depth', str(depth)]
     cmd.append(url)
     cmd.append(str(dest))
 
@@ -85,7 +85,9 @@ def _git_clone(url: str, dest: Path, *, depth: int = 1) -> None:
         )
     except subprocess.CalledProcessError as e:
         raise CloneError(
-            f"Failed to clone '{url}': {e.stderr.strip()}" if e.stderr else f"Failed to clone '{url}'"
+            f"Failed to clone '{url}': {e.stderr.strip()}"
+            if e.stderr
+            else f"Failed to clone '{url}'"
         ) from e
 
 
