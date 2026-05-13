@@ -1,6 +1,9 @@
 # We're using Make as a command runner, so always make (avoids need for .PHONY)
 MAKEFLAGS += --always-make
 
+craft-symlink:  # Create the -craft -> dashcraft symlink for fun
+	ln -sf dashcraft .venv/bin/-craft
+
 help:  # Display help
 	@echo "Usage: make [target] [ARGS='additional args']\n\nTargets:"
 	@awk -F'#' '/^[a-z0-9-]+:/ { sub(":.*", "", $$1); print " ", $$1, "#", $$2 }' Makefile | column -t -s '#'

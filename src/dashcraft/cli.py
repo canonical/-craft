@@ -68,9 +68,9 @@ def _pi_event_handler(event: dict[str, Any]) -> None:
         print(f'  [pi] Extension error: {err}', file=sys.stderr)
 
 
-def _build_parser() -> argparse.ArgumentParser:
+def _build_parser(prog: str = 'dashcraft') -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog='dashcraft',
+        prog=prog,
         description='AI-powered charm generator — charming, but fast.',
     )
     parser.add_argument(
@@ -95,8 +95,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
-    """Entry point for the dashcraft CLI."""
-    parser = _build_parser()
+    """Entry point for the dashcraft CLI (also works as `-craft`)."""
+    prog = os.path.basename(sys.argv[0])
+    parser = _build_parser(prog)
     args = parser.parse_args()
 
     if args.command != 'pack':
