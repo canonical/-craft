@@ -134,11 +134,9 @@ class PiRpcServer:
             if self._proc.stdin:
                 # Try graceful shutdown via the ``abort`` command and
                 # then close stdin so the process can exit.
-                try:
+                with contextlib.suppress(BrokenPipeError, OSError):
                     self._proc.stdin.write(json.dumps({'type': 'abort', 'id': 'shutdown'}) + '\n')
                     self._proc.stdin.flush()
-                except BrokenPipeError, OSError:
-                    pass
                 self._proc.stdin.close()
 
             # Give the process a moment to exit gracefully.
