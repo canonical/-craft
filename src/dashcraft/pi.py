@@ -114,7 +114,7 @@ class PiRpcServer:
         if self._system_prompt:
             cmd += ['--system-prompt', self._system_prompt]
         if self._model:
-            cmd += ['--model', self._model]
+            cmd += ['--model', 'openrouter/' + self._model.removeprefix('openrouter/')]
 
         self._proc = subprocess.Popen(
             cmd,
