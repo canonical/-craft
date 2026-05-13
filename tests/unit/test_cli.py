@@ -57,6 +57,8 @@ class TestMain:
                     else None
                 ),
             )
+            monkeypatch.setattr('quickpack.pack.quick_pack', lambda cwd: Path('result.charm'))
+
             with patch.object(
                 sys, 'argv', ['dashcraft', '--project-dir', str(project_dir), 'pack']
             ):
@@ -66,7 +68,7 @@ class TestMain:
         captured = capsys.readouterr()
         assert 'my-charm' in captured.out
         assert 'Cloned upstream to:' in captured.out
-        assert 'pi is ready' in captured.out
+        assert 'Charm generation phase complete' in captured.out
 
     def test_pack_fails_on_missing_config(self, capsys) -> None:
         with patch.object(sys, 'argv', ['dashcraft', '--project-dir', '/nonexistent', 'pack']):
@@ -99,6 +101,8 @@ class TestMain:
                     else None
                 ),
             )
+            monkeypatch.setattr('quickpack.pack.quick_pack', lambda cwd: Path('result.charm'))
+
             with patch.object(
                 sys,
                 'argv',
@@ -110,6 +114,83 @@ class TestMain:
         captured = capsys.readouterr()
         assert 'my-charm' in captured.out
         assert 'directory will not be cleaned up' in captured.out
+        assert 'Charm generation phase complete' in captured.out
+
+    def test_pack_handles_generate_charm_error(self, capsys, monkeypatch) -> None:
+        """generate_charm raises RuntimeError; pack returns 1."""
+        with make_config(MINIMAL_CONFIG) as config_path:
+            project_dir = config_path.parent
+
+            def fake_run(args, **kwargs):
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout='', stderr='')
+
+            monkeypatch.setenv('GEMINI_API_KEY', 'fake-key')
+            monkeypatch.setattr('subprocess.run', fake_run)
+            monkeypatch.setattr(
+                'shutil.which',
+                lambda cmd: (
+                    '/usr/bin/git'
+                    if cmd == 'git'
+                    else '/usr/local/bin/pi'
+                    if cmd == 'pi'
+                    else None
+                ),
+            )
+            monkeypatch.setattr(
+                'dashcraft.cli.generate_charm',
+                lambda **_kw: (_ for _ in ()).throw(RuntimeError('test boom')),
+            )
+
+            with patch.object(
+                sys, 'argv', ['dashcraft', '--project-dir', str(project_dir), 'pack']
+            ):
+                ret = main()
+
+        assert ret == 1
+        captured = capsys.readouterr()
+        assert 'AI charm generation failed' in captured.err
+
+    def test_pack_without_api_key_skips_generation(self, capsys, monkeypatch) -> None:
+        """When no API key is configured, pi check fails and generation is skipped."""
+        with make_config(MINIMAL_CONFIG) as config_path:
+            project_dir = config_path.parent
+
+            known_keys = [
+                'ANTHROPIC_API_KEY',
+                'OPENAI_API_KEY',
+                'GEMINI_API_KEY',
+                'AZURE_OPENAI_API_KEY',
+                'DEEPSEEK_API_KEY',
+                'GROQ_API_KEY',
+                'MISTRAL_API_KEY',
+                'OPENROUTER_API_KEY',
+                'FIREWORKS_API_KEY',
+            ]
+            for key in known_keys:
+                monkeypatch.delenv(key, raising=False)
+
+            def fake_run(args, **kwargs):
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout='', stderr='')
+
+            monkeypatch.setattr('subprocess.run', fake_run)
+            monkeypatch.setattr(
+                'shutil.which',
+                lambda cmd: (
+                    '/usr/bin/git'
+                    if cmd == 'git'
+                    else '/usr/local/bin/pi'
+                    if cmd == 'pi'
+                    else None
+                ),
+            )
+
+            with patch.object(
+                sys, 'argv', ['dashcraft', '--project-dir', str(project_dir), 'pack']
+            ):
+                ret = main()
+
+        assert ret == 0
+        captured = capsys.readouterr()
         assert 'pi is ready' in captured.out
 
 

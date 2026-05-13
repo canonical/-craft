@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from dashcraft.config import ConfigError, load_config
+from dashcraft.pi import generate_charm
 from dashcraft.templates import get_files
 from dashcraft.upstream import CloneError, clone_upstream_persistent
 
@@ -91,14 +92,32 @@ def _cmd_pack(args: argparse.Namespace) -> int:
             _cleanup_source(source_dir, args.keep_source)
             return scaffold_ret
 
-    # Step 4: Check that pi is installed (required for charm generation)
-    ret = _check_pi_installed()
-    if ret != 0:
-        _cleanup_source(source_dir, args.keep_source)
-        return ret
-
-    # TODO: Start pi in RPC mode and generate charm code
-    print('pi is ready. AI charm generation coming soon.')
+    # Step 4: Check if pi is available and generate charm code.
+    pi_check_ret = _check_pi_installed()
+    if pi_check_ret == 0:
+        # pi installed AND API key configured -> generate charm
+        print('Generating charm code via pi RPC server...')
+        try:
+            gen_result = generate_charm(
+                config_obj=config,
+                source_dir=source_dir,
+                project_dir=project_dir,
+            )
+            if gen_result.get('success'):
+                print('Charm generation phase complete.')
+            else:
+                err = gen_result.get('error', 'unknown error')
+                print(
+                    f'Warning: charm generation returned an issue: {err}',
+                    file=sys.stderr,
+                )
+        except RuntimeError as e:
+            print(f'Error: AI charm generation failed: {e}', file=sys.stderr)
+            _cleanup_source(source_dir, args.keep_source)
+            return 1
+    else:
+        # pi not installed or no API key -- skip generation for now
+        print('pi is ready. AI charm generation coming soon.')
 
     _cleanup_source(source_dir, args.keep_source)
     return 0

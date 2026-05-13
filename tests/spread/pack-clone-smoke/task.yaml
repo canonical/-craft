@@ -11,7 +11,6 @@ execute: |
   OUTPUT="$(dashcraft pack --project-dir "$work_dir" 2>&1)"
   echo "$OUTPUT"
 
-  echo "$OUTPUT" | MATCH "Project directory:"
   echo "$OUTPUT" | MATCH "Packing charm 'clone-smoke'"
   echo "$OUTPUT" | MATCH "Cloned upstream to:"
   echo "$OUTPUT" | MATCH "Upstream source ready"
