@@ -14,14 +14,21 @@ import time
 
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('-d', '--delay', type=float, default=0.012,
-                   help='Seconds to pause between chunks (default: 0.012)')
-    p.add_argument('-b', '--burst', type=int, default=1,
-                   help='Characters per chunk (default: 1)')
-    p.add_argument('-o', '--output',
-                   help='Also write the typed content to this file')
-    p.add_argument('--newline-pause', type=float, default=0.05,
-                   help='Extra pause after each newline (default: 0.05)')
+    p.add_argument(
+        '-d',
+        '--delay',
+        type=float,
+        default=0.012,
+        help='Seconds to pause between chunks (default: 0.012)',
+    )
+    p.add_argument('-b', '--burst', type=int, default=1, help='Characters per chunk (default: 1)')
+    p.add_argument('-o', '--output', help='Also write the typed content to this file')
+    p.add_argument(
+        '--newline-pause',
+        type=float,
+        default=0.05,
+        help='Extra pause after each newline (default: 0.05)',
+    )
     args = p.parse_args()
 
     sink = open(args.output, 'w', encoding='utf-8') if args.output else None

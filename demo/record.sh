@@ -47,6 +47,11 @@ DEMOS=(
 )
 
 SESSION="${DASHCRAFT_DEMO_SESSION:-dashcraft-demo}"
+TMUX_SOCKET="${DASHCRAFT_DEMO_SOCKET:-dashcraft-demo}"
+# All `tmux …` calls below are routed through this shell function so they
+# share a dedicated socket — a freshly-forked server inherits our env, which
+# matters for OPENROUTER_API_KEY and any other vars the panes need.
+tmux() { command tmux -L "$TMUX_SOCKET" "$@"; }
 JUJU_MODEL="${JUJU_MODEL:-dashcraft-demo}"
 COLS="${COLS:-220}"
 ROWS="${ROWS:-64}"
@@ -280,7 +285,7 @@ echo "Recording to $OUTPUT ..."
     --rows "$ROWS" \
     --idle-time-limit "$IDLE_LIMIT" \
     --title "dashcraft demo" \
-    --command "tmux -f $TMUX_CONF attach -t $SESSION" \
+    --command "command tmux -L $TMUX_SOCKET -f $TMUX_CONF attach -t $SESSION" \
     "$OUTPUT"
 
 wait "$DRIVER_PID" 2>/dev/null || true

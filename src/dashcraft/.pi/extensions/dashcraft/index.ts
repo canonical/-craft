@@ -9,9 +9,9 @@
  *   dashcraft              — tool for the LLM: takes a charm directory + workload clone,
  *                            researches the workload, then writes charmcraft.yaml & src/charm.py
  *   charm_build            — run `quickpack pack` (installs prereqs, then packs)
- *   charm_lint             — run `tox run -e lint`
- *   charm_test_unit        — run `tox run -e unit`
- *   charm_test_integration — run `tox run -e integration`
+ *   charm_lint             — run ruff/codespell/pyright via `uv run --group lint`
+ *   charm_test_unit        — run pytest via `uv run --group unit`
+ *   charm_test_integration — run pytest via `uv run --group integration`
  *   charm_help             — list available skills and reference docs
  *
  * Skills loaded (callable via /skill:<name>):
@@ -105,6 +105,36 @@ function runDashcraft(
       stdout: err.stdout || "",
       stderr: err.stderr || err.message || String(err),
     };
+  }
+}
+
+/**
+ * Run `uv <args>` in *cwd* and merge stdout+stderr into a single transcript.
+ *
+ * Used by charm_lint / charm_test_unit / charm_test_integration to bypass
+ * tox — `uv run --group <name>` resolves the right dependency group from
+ * the generated charm's pyproject.toml without paying tox's per-env venv
+ * creation cost on every call.
+ */
+function runUv(
+  args: string[],
+  cwd: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): { ok: boolean; output: string } {
+  try {
+    const out = execSync(`uv ${args.join(" ")}`, {
+      cwd,
+      encoding: "utf-8",
+      timeout: timeoutMs,
+      signal,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    return { ok: true, output: (out || "").trim() };
+  } catch (err: any) {
+    const stdout = (err.stdout ?? "").toString();
+    const stderr = (err.stderr ?? err.message ?? String(err)).toString();
+    return { ok: false, output: `${stdout}\n${stderr}`.trim() };
   }
 }
 
@@ -858,10 +888,14 @@ export default function (pi: ExtensionAPI) {
     name: "charm_lint",
     label: "Charm Lint",
     description:
-      "Lint a Juju charm project using `tox run -e lint`. Checks code style with ruff, codespell, and pyright.",
-    promptSnippet: "Lint a Juju charm project (ruff, codespell, pyright)",
+      "Lint a Juju charm project via `uv run --group lint`. Runs ruff check, " +
+      "ruff format --check, codespell, and pyright sequentially; stops at " +
+      "the first failure. Bypasses tox to avoid a 30–90s per-env venv build " +
+      "on first call.",
+    promptSnippet: "Lint a Juju charm project (ruff, codespell, pyright via uv)",
     promptGuidelines: [
-      "Use charm_lint when the user asks to lint or check a charm's code quality. Run from the charm project root.",
+      "Use charm_lint to check a charm's code quality. Run from the charm project root.",
+      "On failure the transcript shows the first failed check; fix that one and re-run.",
     ],
     parameters: Type.Object({
       directory: Type.Optional(
@@ -876,43 +910,46 @@ export default function (pi: ExtensionAPI) {
 
       onUpdate?.({ content: [{ type: "text", text: "Linting charm..." }] });
 
-      try {
-        const output = execSync("tox run -e lint", {
-          cwd: absDir,
-          encoding: "utf-8",
-          timeout: 120_000,
-          signal,
-          stdio: ["pipe", "pipe", "pipe"],
-        });
+      const checks: Array<{ name: string; args: string[] }> = [
+        { name: "ruff check", args: ["run", "--group", "lint", "ruff", "check", "src", "tests"] },
+        { name: "ruff format", args: ["run", "--group", "lint", "ruff", "format", "--check", "--diff", "src", "tests"] },
+        { name: "codespell", args: ["run", "--group", "lint", "codespell", "."] },
+        { name: "pyright", args: ["run", "--group", "lint", "pyright"] },
+      ];
 
-        return {
-          content: [
-            {
+      const transcript: string[] = [];
+      for (const { name, args } of checks) {
+        if (signal?.aborted) {
+          return { content: [{ type: "text", text: "Cancelled." }], details: { error: "cancelled" } };
+        }
+        const result = runUv(args, absDir, 120_000, signal);
+        transcript.push(`--- ${name} ---\n${result.output || "(no output)"}`);
+        if (!result.ok) {
+          return {
+            content: [{
               type: "text",
-              text: `Lint passed:\n${output.trim()}`,
-            },
-          ],
-          details: { output: output.trim() },
-        };
-      } catch (err: any) {
-        const stderr = err.stderr || err.message || String(err);
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Lint failed:\n${stderr}`,
-            },
-          ],
-          details: { error: "lint_failed", stderr },
-          isError: true,
-        };
+              text: `Lint failed at ${name}:\n\n${transcript.join("\n\n")}`,
+            }],
+            details: { error: "lint_failed", failed_check: name, transcript: transcript.join("\n\n") },
+            isError: true,
+          };
+        }
       }
+
+      return {
+        content: [{
+          type: "text",
+          text: `Lint passed (${checks.length} checks).\n\n${transcript.join("\n\n")}`,
+        }],
+        details: { transcript: transcript.join("\n\n") },
+      };
     },
 
     renderResult(result, _options, theme, _context) {
-      const details = result.details as { error?: string } | undefined;
+      const details = result.details as { error?: string; failed_check?: string } | undefined;
       if (details?.error) {
-        return new Text(theme.fg("warning", "⚠ Lint issues found"), 0, 0);
+        const tail = details.failed_check ? ` (${details.failed_check})` : "";
+        return new Text(theme.fg("warning", `⚠ Lint failed${tail}`), 0, 0);
       }
       return new Text(theme.fg("success", "✓ Lint passed"), 0, 0);
     },
@@ -924,10 +961,12 @@ export default function (pi: ExtensionAPI) {
     name: "charm_test_unit",
     label: "Charm Unit Test",
     description:
-      "Run unit tests for a Juju charm using `tox run -e unit`.",
-    promptSnippet: "Run unit tests for a Juju charm",
+      "Run unit tests for a Juju charm via `uv run --group unit pytest`. " +
+      "Bypasses tox to avoid a 30–90s per-env venv build on first call. " +
+      "Coverage instrumentation is skipped here; use tox locally if needed.",
+    promptSnippet: "Run unit tests for a Juju charm (pytest via uv)",
     promptGuidelines: [
-      "Use charm_test_unit when the user asks to run charm unit tests. Run from the charm project root.",
+      "Use charm_test_unit to run a charm's unit tests. Run from the charm project root.",
     ],
     parameters: Type.Object({
       directory: Type.Optional(
@@ -942,37 +981,25 @@ export default function (pi: ExtensionAPI) {
 
       onUpdate?.({ content: [{ type: "text", text: "Running unit tests..." }] });
 
-      try {
-        const output = execSync("tox run -e unit", {
-          cwd: absDir,
-          encoding: "utf-8",
-          timeout: 120_000,
-          signal,
-          stdio: ["pipe", "pipe", "pipe"],
-        });
+      const result = runUv(
+        ["run", "--group", "unit", "pytest", "tests/unit", "-v", "--tb=native"],
+        absDir,
+        120_000,
+        signal,
+      );
 
+      if (!result.ok) {
         return {
-          content: [
-            {
-              type: "text",
-              text: `Unit tests passed:\n${output.trim()}`,
-            },
-          ],
-          details: { output: output.trim() },
-        };
-      } catch (err: any) {
-        const stderr = err.stderr || err.message || String(err);
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Unit tests failed:\n${stderr}`,
-            },
-          ],
-          details: { error: "tests_failed", stderr },
+          content: [{ type: "text", text: `Unit tests failed:\n${result.output}` }],
+          details: { error: "tests_failed", output: result.output },
           isError: true,
         };
       }
+
+      return {
+        content: [{ type: "text", text: `Unit tests passed:\n${result.output}` }],
+        details: { output: result.output },
+      };
     },
 
     renderResult(result, _options, theme, _context) {
@@ -990,9 +1017,9 @@ export default function (pi: ExtensionAPI) {
     name: "charm_test_integration",
     label: "Charm Integration Test",
     description:
-      "Run integration tests for a Juju charm using `tox run -e integration`. " +
+      "Run integration tests for a Juju charm via `uv run --group integration pytest`. " +
       "Requires a Juju controller and model. See /skill:charm-testing for test patterns.",
-    promptSnippet: "Run integration tests for a Juju charm (requires Juju controller)",
+    promptSnippet: "Run integration tests for a Juju charm (pytest via uv; requires Juju controller)",
     promptGuidelines: [
       "Use charm_test_integration when the user asks to run integration tests. These require a live Juju controller. Read /skill:charm-testing first for the test framework.",
     ],
@@ -1009,37 +1036,28 @@ export default function (pi: ExtensionAPI) {
 
       onUpdate?.({ content: [{ type: "text", text: "Running integration tests..." }] });
 
-      try {
-        const output = execSync("tox run -e integration", {
-          cwd: absDir,
-          encoding: "utf-8",
-          timeout: 600_000, // 10 min
-          signal,
-          stdio: ["pipe", "pipe", "pipe"],
-        });
+      const result = runUv(
+        [
+          "run", "--group", "integration",
+          "pytest", "tests/integration", "-v", "--tb=native", "--log-cli-level=INFO",
+        ],
+        absDir,
+        600_000,
+        signal,
+      );
 
+      if (!result.ok) {
         return {
-          content: [
-            {
-              type: "text",
-              text: `Integration tests passed:\n${output.trim()}`,
-            },
-          ],
-          details: { output: output.trim() },
-        };
-      } catch (err: any) {
-        const stderr = err.stderr || err.message || String(err);
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Integration tests failed:\n${stderr}`,
-            },
-          ],
-          details: { error: "integration_failed", stderr },
+          content: [{ type: "text", text: `Integration tests failed:\n${result.output}` }],
+          details: { error: "integration_failed", output: result.output },
           isError: true,
         };
       }
+
+      return {
+        content: [{ type: "text", text: `Integration tests passed:\n${result.output}` }],
+        details: { output: result.output },
+      };
     },
 
     renderResult(result, _options, theme, _context) {
@@ -1091,9 +1109,9 @@ export default function (pi: ExtensionAPI) {
       msg += "\n## Tools Available\n\n";
       msg += "- `dashcraft` — initialize a charm: takes (directory, workload), researches workload, writes charmcraft.yaml & src/charm.py\n";
       msg += "- `charm_build` — run `quickpack pack` (installs prereqs, then packs)\n";
-      msg += "- `charm_lint` — run `tox run -e lint`\n";
-      msg += "- `charm_test_unit` — run `tox run -e unit`\n";
-      msg += "- `charm_test_integration` — run `tox run -e integration`\n";
+      msg += "- `charm_lint` — ruff/codespell/pyright via `uv run --group lint`\n";
+      msg += "- `charm_test_unit` — pytest via `uv run --group unit`\n";
+      msg += "- `charm_test_integration` — pytest via `uv run --group integration`\n";
 
       return {
         content: [{ type: "text", text: msg }],

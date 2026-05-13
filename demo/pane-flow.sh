@@ -62,7 +62,7 @@ parts:
     model: openrouter/$MODEL
 "
 
-printf '%s' "$YAML_BODY" | python3 "$TYPEWRITER" -d "$TYPE_DELAY" -o -craft.yaml
+printf '%s' "$YAML_BODY" | python3 "$TYPEWRITER" -d "$TYPE_DELAY" "--output=-craft.yaml"
 
 echo
 sleep 0.6
@@ -84,8 +84,16 @@ fi
 # The CLI prints:
 #   Deploy with:
 #     juju deploy ./<file>.charm --resource ...
-# Extract the indented command on the line *after* "Deploy with:".
-DEPLOY=$(awk '/^Deploy with:/{getline; sub(/^[[:space:]]+/,""); print; exit}' "$LOG")
+# We grab the *last* indented `juju deploy …` line so interleaved stderr
+# (pi event chatter) can't fool us.
+DEPLOY=$(python3 - "$LOG" <<'PY'
+import sys, re
+with open(sys.argv[1], encoding='utf-8', errors='replace') as f:
+    text = f.read()
+matches = re.findall(r'^[ \t]+(juju deploy [^\n]+)$', text, re.MULTILINE)
+print(matches[-1] if matches else '')
+PY
+)
 
 if [ -z "$DEPLOY" ]; then
     printf "\n${B}\033[31m✗ Could not find deploy command in pack output.${R}\n"
