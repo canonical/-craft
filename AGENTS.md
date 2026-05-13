@@ -10,7 +10,7 @@ type: charm
 parts:
   charm:
     plugin: -craft
-    upstream: <the software to charm>
+    upstream: <the software to charm, a git URL>
     model: <the AI model to use>
     language: <reserved for future use>
 ```
