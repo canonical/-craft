@@ -6,19 +6,7 @@ execute: |
   local work_dir="/root/work-clone-bad-url"
   rm -rf "$work_dir"
   mkdir -p "$work_dir"
-
-  cat > "$work_dir/dashcraft.yaml" << 'EOF'
-  name: bad-upstream
-  summary: Test with invalid upstream
-  description: Verifies graceful error for bad git URL
-  type: charm
-
-  parts:
-    charm:
-      plugin: -craft
-      upstream: https://github.com/dashcraft-test-user/this-repo-definitely-does-not-exist.git
-      model: gpt-4
-  EOF
+  cp "$SPREAD_PATH/tests/spread/pack-clone-bad-url/dashcraft.yaml" "$work_dir/dashcraft.yaml"
 
   # dashcraft pack should exit non-zero with a clear error.
   rc=0

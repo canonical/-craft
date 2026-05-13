@@ -3,24 +3,12 @@ systems:
   - ubuntu-24.04
 
 execute: |
-  # Create a project directory with a dashcraft.yaml pointing at a small,
-  # fast-to-clone public repo.
+  # Use the sibling dashcraft.yaml, which points at a small, fast-to-clone
+  # public repo.
   local work_dir="/root/work-clone-smoke"
   rm -rf "$work_dir"
   mkdir -p "$work_dir"
-
-  cat > "$work_dir/dashcraft.yaml" << 'EOF'
-  name: clone-smoke
-  summary: Smoke test for upstream cloning
-  description: Verifies dashcraft pack can clone an upstream repo
-  type: charm
-
-  parts:
-    charm:
-      plugin: -craft
-      upstream: https://github.com/canonical/pebble.git
-      model: gpt-4
-  EOF
+  cp "$SPREAD_PATH/tests/spread/pack-clone-smoke/dashcraft.yaml" "$work_dir/dashcraft.yaml"
 
   # dashcraft pack should clone the upstream and report success.
   OUTPUT="$(dashcraft pack --project-dir "$work_dir" 2>&1)"

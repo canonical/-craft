@@ -1,0 +1,10 @@
+name: clone-smoke
+summary: Smoke test for upstream cloning
+description: Verifies dashcraft pack can clone an upstream repo
+type: charm
+
+parts:
+  charm:
+    plugin: -craft
+    upstream: https://github.com/canonical/pebble.git
+    model: gpt-4

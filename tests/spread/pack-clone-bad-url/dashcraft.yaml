@@ -1,0 +1,10 @@
+name: bad-upstream
+summary: Test with invalid upstream
+description: Verifies graceful error for bad git URL
+type: charm
+
+parts:
+  charm:
+    plugin: -craft
+    upstream: https://github.com/dashcraft-test-user/this-repo-definitely-does-not-exist.git
+    model: gpt-4
