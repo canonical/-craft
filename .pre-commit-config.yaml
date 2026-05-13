@@ -15,6 +15,24 @@ repos:
     hooks:
       - id: check-github-workflows
 
+  - repo: local
+    hooks:
+      - id: make-format
+        name: make format
+        entry: make format
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: make-lint
+        name: make lint
+        entry: make lint
+        language: system
+        types: [python]
+        pass_filenames: false
+
 ci:
+  # pre-commit.ci doesn't have uv/python 3.14 available, so skip the
+  # make-driven hooks there. Our GitHub Actions CI runs them instead.
+  skip: [make-format, make-lint]
   autofix_commit_msg: "style: auto-fix from pre-commit hooks"
   autoupdate_commit_msg: "chore: update pre-commit hooks"
