@@ -180,11 +180,17 @@ export function filledCharmcraftYaml(ctx: CharmTemplateContext, analysis: Worklo
     parts.push(`  ${line}`);
   }
   parts.push("");
-  parts.push("base: ubuntu@22.04");
+  parts.push("base: ubuntu@24.04");
   parts.push("platforms:");
   parts.push("  amd64:");
   parts.push("  arm64:");
   parts.push("");
+
+  parts.push("assumes:");
+  parts.push("  - juju >= 3.6");
+  parts.push("  - k8s-api");
+  parts.push("");
+
   parts.push("parts:");
   parts.push("  charm:");
   parts.push("    plugin: uv");
@@ -193,13 +199,13 @@ export function filledCharmcraftYaml(ctx: CharmTemplateContext, analysis: Worklo
   parts.push("      - astral-uv");
   parts.push("");
 
-  // Config
+  // ── Config ────────────────────────────────────────────────────
   parts.push("config:");
   parts.push("  options:");
   parts.push("    log-level:");
   parts.push("      description: |");
   parts.push('        Configures the log level of the workload.');
-  parts.push('        Acceptable values are: "info", "debug", "warning", "error" and "critical"');
+  parts.push('        Acceptable values are: "debug", "info", "warning", "error" and "critical"');
   parts.push('      default: "info"');
   parts.push("      type: string");
   if (analysis.port && analysis.port !== 8080) {
@@ -208,9 +214,12 @@ export function filledCharmcraftYaml(ctx: CharmTemplateContext, analysis: Worklo
     parts.push(`      default: ${analysis.port}`);
     parts.push("      type: int");
   }
-  // Add detected env vars as config options
+  // Env vars as config options (skip infra keys handled by relations)
   for (const [key, val] of Object.entries(analysis.envVars)) {
     const configKey = key.toLowerCase().replace(/_/g, "-");
+    const skipKeys = ["database-url", "db-url", "redis-url", "redis-host",
+                       "postgres-url", "datasource-url", "mysql-url"];
+    if (skipKeys.includes(configKey)) continue;
     parts.push(`    ${configKey}:`);
     parts.push(`      description: Sets the ${key} environment variable.`);
     parts.push(`      default: "${val}"`);
@@ -218,21 +227,74 @@ export function filledCharmcraftYaml(ctx: CharmTemplateContext, analysis: Worklo
   }
   parts.push("");
 
-  // Relations
-  if (analysis.needsDatabase) {
-    parts.push("requires:");
-    parts.push("  database:");
-    parts.push("    interface: postgresql_client");
-    parts.push("");
-  }
+  // ── Relations ─────────────────────────────────────────────────
+  parts.push("provides:");
+  parts.push("  metrics-endpoint:");
+  parts.push("    interface: prometheus_scrape");
+  parts.push("  grafana-dashboard:");
+  parts.push("    interface: grafana_dashboard");
   if (analysis.isWebApp) {
-    parts.push("provides:");
     parts.push("  ingress:");
     parts.push("    interface: ingress");
+  }
+  if (analysis.needsDatabase || analysis.hasPostgres) {
+    parts.push("  postgresql:");
+    parts.push("    interface: postgresql_client");
+  }
+  parts.push("");
+
+  parts.push("requires:");
+  parts.push("  tracing:");
+  parts.push("    interface: tracing");
+  parts.push("    limit: 1");
+  parts.push("    optional: true");
+  parts.push("  logging:");
+  parts.push("    interface: loki_push_api");
+  parts.push("    optional: true");
+  if (analysis.needsDatabase || analysis.hasPostgres) {
+    parts.push("  database:");
+    parts.push("    interface: postgresql_client");
+    parts.push("    optional: true");
+    parts.push("    limit: 1");
+  }
+  parts.push("");
+
+  if (analysis.needsClustering) {
+    parts.push("peers:");
+    parts.push("  cluster:");
+    parts.push("    interface: cluster");
     parts.push("");
   }
 
-  // Containers
+  // ── Storage ───────────────────────────────────────────────────
+  if (analysis.needsStorage) {
+    parts.push("storage:");
+    parts.push("  data:");
+    parts.push("    type: filesystem");
+    parts.push("    location: /var/lib/app");
+    parts.push("");
+  }
+
+  // ── Actions ───────────────────────────────────────────────────
+  parts.push("actions:");
+  parts.push("  health-check:");
+  parts.push("    description: Run a comprehensive health check on the workload.");
+  parts.push("  backup:");
+  parts.push("    description: Create a backup of application data.");
+  parts.push("    params:");
+  parts.push("      path:");
+  parts.push("        type: string");
+  parts.push("        description: Destination path for the backup.");
+  parts.push("        default: /var/backups");
+  parts.push("  pause:");
+  parts.push("    description: Pause the workload service.");
+  parts.push("  resume:");
+  parts.push("    description: Resume the workload service.");
+  parts.push("  collect-diagnostics:");
+  parts.push("    description: Collect diagnostic information about the deployment.");
+  parts.push("");
+
+  // ── Containers & Resources ────────────────────────────────────
   parts.push("containers:");
   parts.push("  workload:");
   parts.push("    resource: workload-image");
