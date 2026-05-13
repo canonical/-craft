@@ -32,6 +32,74 @@ const SKILLS_DIR = path.resolve(__dirname, "..", "skills");
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
+/** Check whether `quickpack` is available on PATH. */
+function quickpackAvailable(): boolean {
+  try {
+    execSync("which quickpack", { encoding: "utf-8" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Check whether `dashcraft` is available on PATH. */
+function dashcraftAvailable(): boolean {
+  try {
+    execSync("which dashcraft", { encoding: "utf-8" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Run a quickpack command and return { ok, stdout, stderr }. */
+function runQuickpack(
+  args: string[],
+  cwd?: string,
+  options?: { timeout?: number; signal?: AbortSignal },
+): { ok: boolean; stdout: string; stderr: string } {
+  try {
+    const output = execSync(`quickpack ${args.join(" ")}`, {
+      cwd,
+      encoding: "utf-8",
+      timeout: options?.timeout ?? 300_000,
+      signal: options?.signal,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    return { ok: true, stdout: output.trim(), stderr: "" };
+  } catch (err: any) {
+    return {
+      ok: false,
+      stdout: err.stdout || "",
+      stderr: err.stderr || err.message || String(err),
+    };
+  }
+}
+
+/** Run a dashcraft CLI command and return { ok, stdout, stderr }. */
+function runDashcraft(
+  args: string[],
+  cwd?: string,
+  options?: { timeout?: number; signal?: AbortSignal },
+): { ok: boolean; stdout: string; stderr: string } {
+  try {
+    const output = execSync(`dashcraft ${args.join(" ")}`, {
+      cwd,
+      encoding: "utf-8",
+      timeout: options?.timeout ?? 300_000,
+      signal: options?.signal,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    return { ok: true, stdout: output.trim(), stderr: "" };
+  } catch (err: any) {
+    return {
+      ok: false,
+      stdout: err.stdout || "",
+      stderr: err.stderr || err.message || String(err),
+    };
+  }
+}
+
 /** Write a file, creating parent directories as needed. */
 function writeFile(filePath: string, content: string): void {
   const dir = path.dirname(filePath);
