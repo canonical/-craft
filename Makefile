@@ -11,6 +11,7 @@ all: format lint unit  # Run all quick, local commands
 
 format:  # Format the Python code
 	uv run ruff format
+	uv run ruff check --fix --unsafe-fixes
 
 lint:  # Perform linting and static type checks
 	uv run ruff check
