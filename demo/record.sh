@@ -222,7 +222,7 @@ for i in "${!DEMOS[@]}"; do
 done
 
 tmux send-keys -t "$STATUS_PANE" "juju status --relations --watch 1s --color"
-tmux send-keys -t "$LOG_PANE"    "juju debug-log --tail --color --replay"
+tmux send-keys -t "$LOG_PANE"    "juju debug-log --tail --color --ms"
 
 # ---------------------------------------------------------------------------
 # Driver: press Enter in every pane once recording is rolling, then wait
