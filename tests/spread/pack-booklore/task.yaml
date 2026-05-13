@@ -1,11 +1,6 @@
 summary: Scaffold, pack, and deploy a Booklore charm
-# Upstream: https://github.com/booklore-app/booklore
 systems:
   - ubuntu-24.04
-
-environment:
-  NAME: booklore
-  WORKLOAD_IMAGE: ghcr.io/booklore-app/booklore:latest
 
 execute: |
   source "$SPREAD_PATH/tests/spread/charm-helpers.sh"

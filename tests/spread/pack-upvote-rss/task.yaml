@@ -1,11 +1,6 @@
 summary: Scaffold, pack, and deploy an upvote-rss charm
-# Upstream: https://github.com/johnwarne/upvote-rss
 systems:
   - ubuntu-24.04
-
-environment:
-  NAME: upvote-rss
-  WORKLOAD_IMAGE: ghcr.io/johnwarne/upvote-rss:latest
 
 execute: |
   source "$SPREAD_PATH/tests/spread/charm-helpers.sh"

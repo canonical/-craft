@@ -1,11 +1,6 @@
 summary: Scaffold, pack, and deploy a Colibri.social charm
-# Upstream: https://github.com/colibri-social/colibri.social
 systems:
   - ubuntu-24.04
-
-environment:
-  NAME: colibri-social
-  WORKLOAD_IMAGE: ghcr.io/colibri-social/colibri:latest
 
 execute: |
   source "$SPREAD_PATH/tests/spread/charm-helpers.sh"

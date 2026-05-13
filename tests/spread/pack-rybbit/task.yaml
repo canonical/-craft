@@ -1,11 +1,6 @@
 summary: Scaffold, pack, and deploy a Rybbit charm
-# Upstream: https://rybbit.com/docs/self-hosting
 systems:
   - ubuntu-24.04
-
-environment:
-  NAME: rybbit
-  WORKLOAD_IMAGE: ghcr.io/rybbit-io/rybbit-backend:latest
 
 execute: |
   source "$SPREAD_PATH/tests/spread/charm-helpers.sh"
