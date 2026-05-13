@@ -57,8 +57,11 @@ class TestMain:
                     else None
                 ),
             )
-            monkeypatch.setattr('quickpack.pack.quick_pack', lambda cwd: Path('result.charm'))
-
+            # Mock generate_charm to avoid starting a real pi subprocess.
+            monkeypatch.setattr(
+                'dashcraft.cli.generate_charm',
+                lambda **_kw: {'type': 'response', 'success': True},
+            )
             with patch.object(
                 sys, 'argv', ['dashcraft', '--project-dir', str(project_dir), 'pack']
             ):
@@ -101,8 +104,11 @@ class TestMain:
                     else None
                 ),
             )
-            monkeypatch.setattr('quickpack.pack.quick_pack', lambda cwd: Path('result.charm'))
-
+            # Mock generate_charm to avoid starting a real pi subprocess.
+            monkeypatch.setattr(
+                'dashcraft.cli.generate_charm',
+                lambda **_kw: {'type': 'response', 'success': True},
+            )
             with patch.object(
                 sys,
                 'argv',
