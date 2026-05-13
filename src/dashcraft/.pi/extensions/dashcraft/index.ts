@@ -8,7 +8,7 @@
  *   /dashcraft [name]      — scaffold & research a new charm interactively
  *   dashcraft              — tool for the LLM: takes a charm directory + workload clone,
  *                            researches the workload, then writes charmcraft.yaml & src/charm.py
- *   charm_build            — run `charmcraft pack`
+ *   charm_build            — run `quickpack pack` (installs prereqs, then packs)
  *   charm_lint             — run `tox run -e lint`
  *   charm_test_unit        — run `tox run -e unit`
  *   charm_test_integration — run `tox run -e integration`
@@ -727,8 +727,8 @@ export default function (pi: ExtensionAPI) {
     name: "charm_build",
     label: "Charm Build",
     description:
-      "Build a Juju charm using `charmcraft pack`. Runs in the project root directory.",
-    promptSnippet: "Build a Juju charm with charmcraft pack",
+      "Build a Juju charm using `quickpack` (a prereq installation tool that also packs). Runs in the project root directory.",
+    promptSnippet: "Build a Juju charm with quickpack",
     promptGuidelines: [
       "Use charm_build when the user asks to build or pack a charm. Run it from the charm project root.",
     ],
@@ -755,40 +755,48 @@ export default function (pi: ExtensionAPI) {
         };
       }
 
-      onUpdate?.({ content: [{ type: "text", text: "Building charm..." }] });
+      onUpdate?.({ content: [{ type: "text", text: "Installing prereqs & building charm..." }] });
 
       try {
-        // Check if charmcraft is available
-        try {
-          execSync("which charmcraft", { encoding: "utf-8" });
-        } catch {
+        // Check if quickpack is available
+        if (!quickpackAvailable()) {
           return {
             content: [
               {
                 type: "text",
-                text: "Error: charmcraft is not installed. Install it with: `sudo snap install charmcraft --classic`",
+                text: "Error: quickpack is not installed. Install it with: `sudo snap install quickpack --classic`",
               },
             ],
-            details: { error: "charmcraft_missing" },
+            details: { error: "quickpack_missing" },
           };
         }
 
-        const output = execSync("charmcraft pack", {
-          cwd: absDir,
-          encoding: "utf-8",
+        const result = runQuickpack(["pack"], absDir, {
           timeout: 300_000, // 5 min
           signal,
-          stdio: ["pipe", "pipe", "pipe"],
         });
+
+        if (!result.ok) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: `Charm build failed:\n${result.stderr}`,
+              },
+            ],
+            details: { error: "build_failed", stderr: result.stderr },
+            isError: true,
+          };
+        }
 
         return {
           content: [
             {
               type: "text",
-              text: `Charm built successfully:\n${output.trim()}`,
+              text: `Charm built successfully:\n${result.stdout}`,
             },
           ],
-          details: { output: output.trim(), directory: absDir },
+          details: { output: result.stdout, directory: absDir },
         };
       } catch (err: any) {
         const stderr = err.stderr || err.message || String(err);
@@ -1058,7 +1066,7 @@ export default function (pi: ExtensionAPI) {
       msg += "5. **Debug**: `/skill:debugging` — diagnose and fix issues\n";
       msg += "\n## Tools Available\n\n";
       msg += "- `dashcraft` — initialize a charm: takes (directory, workload), researches workload, writes charmcraft.yaml & src/charm.py\n";
-      msg += "- `charm_build` — run `charmcraft pack`\n";
+      msg += "- `charm_build` — run `quickpack pack` (installs prereqs, then packs)\n";
       msg += "- `charm_lint` — run `tox run -e lint`\n";
       msg += "- `charm_test_unit` — run `tox run -e unit`\n";
       msg += "- `charm_test_integration` — run `tox run -e integration`\n";
