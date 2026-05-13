@@ -15,7 +15,7 @@ import json
 import subprocess
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +46,9 @@ class PiRpcServer:
         model: str = '',
         extension: str | None = None,
         work_dir: str | Path | None = None,
+        system_prompt: str | None = None,
+        no_skills: bool = True,
+        no_prompt_templates: bool = True,
     ) -> None:
         """Initialise configuration for the RPC subprocess.
 
@@ -56,10 +59,24 @@ class PiRpcServer:
                 Defaults to the shipped juju-charm extension.
             work_dir: Working directory for the pi subprocess.
                 Defaults to the current working directory.
+            system_prompt: Custom system prompt for the agent.
+                When ``None`` a default charm-focused prompt is used.
+                Pass ``""`` to disable the ``--system-prompt`` flag.
+            no_skills: Pass ``--no-skills`` to pi. Set ``False`` to
+                allow loading project/user skills.
+            no_prompt_templates: Pass ``--no-prompt-templates`` to pi.
+                Set ``False`` to allow loading prompt templates.
         """
         self._model = model
         self._extension = extension or str(_EXTENSION_PATH)
         self._work_dir = str(work_dir) if work_dir else str(Path.cwd())
+        self._system_prompt = (
+            system_prompt
+            if system_prompt is not None
+            else 'You are an assistant that generates Juju charm code.'
+        )
+        self._no_skills = no_skills
+        self._no_prompt_templates = no_prompt_templates
         self._proc: subprocess.Popen[str] | None = None
 
     # -- context manager -----------------------------------------------------
@@ -82,15 +99,17 @@ class PiRpcServer:
             '--mode',
             'rpc',
             '--no-session',
-            '--no-skills',
-            '--no-prompt-templates',
             '--no-context-files',
             '--no-themes',
             '--extension',
             self._extension,
-            '--system-prompt',
-            'You are an assistant that generates Juju charm code.',
         ]
+        if self._no_skills:
+            cmd += ['--no-skills']
+        if self._no_prompt_templates:
+            cmd += ['--no-prompt-templates']
+        if self._system_prompt:
+            cmd += ['--system-prompt', self._system_prompt]
         if self._model:
             cmd += ['--model', self._model]
 
@@ -139,7 +158,13 @@ class PiRpcServer:
 
     # -- communication -------------------------------------------------------
 
-    def send(self, command: dict[str, Any], *, timeout: float = 30.0) -> dict[str, Any]:
+    def send(
+        self,
+        command: dict[str, Any],
+        *,
+        timeout: float = 30.0,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         """Send a single command and return its response.
 
         This writes *command* to stdin (JSONL), reads JSON lines from
@@ -148,12 +173,14 @@ class PiRpcServer:
         ``id`` was set), and returns that response dict.
 
         Other lines (events, extension UI requests, etc.) are discarded
-        for now; callers can use :meth:`events` for fine-grained
-        processing.
+        by default.  Supply *on_event* to receive each event dict as it
+        arrives.
 
         Args:
             command: The JSON-RPC-style command dict.
             timeout: Max seconds to wait for a matching response.
+            on_event: Optional callback invoked for each event dict
+                read from stdout before the matching response arrives.
 
         Returns:
             The decoded response dict.
@@ -201,6 +228,8 @@ class PiRpcServer:
                     continue
 
                 events_seen.append(msg)
+                if on_event:
+                    on_event(msg)
                 if msg.get('type') == 'response':
                     resp_id = msg.get('id')
                     # Match on id if the original command had one.
@@ -213,6 +242,35 @@ class PiRpcServer:
             f'Timed out waiting for pi RPC response (id={cmd_id!r}). '
             f'Events seen: {len(events_seen)}'
         )
+
+    def wait_for_agent_end(
+        self,
+        *,
+        timeout: float = 600.0,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any] | None:
+        """Read events until ``agent_end`` or timeout.
+
+        After sending a ``prompt`` command, the agent works
+        asynchronously. Call this to wait for it to finish.
+
+        Args:
+            timeout: Maximum seconds to wait (default 600 == 10 min).
+            on_event: Optional callback for every event dict seen.
+
+        Returns:
+            The ``agent_end`` event dict, or ``None`` on timeout /
+            process exit.
+        """
+        deadline = time.monotonic() + timeout
+        for event in self.events():
+            if on_event:
+                on_event(event)
+            if event.get('type') == 'agent_end':
+                return event
+            if time.monotonic() >= deadline:
+                return None
+        return None
 
     def events(self) -> Iterator[dict[str, Any]]:
         """Yield JSON events from the pi subprocess stdout.
@@ -254,35 +312,129 @@ def _default_model_for_config(config_obj: Any) -> str:
     return _DEFAULT_MODEL
 
 
+def _build_generation_prompt(
+    *,
+    charm_dir: Path,
+    workload_dir: Path,
+    charm_name: str,
+    summary: str = '',
+    description: str = '',
+) -> str:
+    """Build the multi-phase prompt for the pi agent.
+
+    Args:
+        charm_dir: Path to the scaffolded charm project.
+        workload_dir: Path to the cloned upstream workload source.
+        charm_name: Name of the charm (from config).
+        summary: Short summary from the config (may be empty).
+        description: Longer description from the config (may be empty).
+
+    Returns:
+        The prompt string to send via the pi RPC ``prompt`` command.
+    """
+    # Build context header from config metadata.
+    context_parts = [f'Charm name: {charm_name}']
+    if summary:
+        context_parts.append(f'Summary: {summary}')
+    if description:
+        context_parts.append(f'Description: {description}')
+    context_header = '\n'.join(context_parts)
+
+    return (
+        f'You are going to build a Juju charm for a workload. Do everything in one shot '
+        f'— do NOT stop and ask questions, just keep going until the charm is ready.\n'
+        f'\n'
+        f'## Project context\n'
+        f'{context_header}\n'
+        f'Charm directory: {charm_dir}\n'
+        f'Workload source: {workload_dir}\n'
+        f'\n'
+        f'## Phase 1: Initial research\n'
+        f'Call the dashcraft tool with:\n'
+        f'  directory={charm_dir}\n'
+        f'  workload={workload_dir}\n'
+        f'\n'
+        f'## Phase 2: Fix structural issues\n'
+        f'Read the generated charmcraft.yaml and src/charm.py. Fix any structural problems:\n'
+        f'- Malformed YAML or dict nesting\n'
+        f'- Placeholder commands (/bin/foo)\n'
+        f'- Missing module files\n'
+        f'- Incorrect container/resource names\n'
+        f"- Anything that won't work\n"
+        f'\n'
+        f'## Phase 3: Lint and fix\n'
+        f'Run charm_lint on {charm_dir}. If it fails, fix the issues and re-run '
+        f'until lint passes cleanly.\n'
+        f'\n'
+        f'## Phase 4: Unit tests and fix\n'
+        f'Run charm_test_unit on {charm_dir}. If it fails, fix the issues and re-run '
+        f'until unit tests pass cleanly.\n'
+        f'\n'
+        f'## Phase 5: Load skills for quality\n'
+        f'Load /skill:relations if the workload has database/integration needs, '
+        f'/skill:observability for COS integration, and '
+        f'/skill:operational-patterns for actions/config/status patterns. '
+        f'Apply the relevant patterns.\n'
+        f'\n'
+        f'## Phase 6: Final validation\n'
+        f'Run charm_lint AND charm_test_unit one last time to confirm everything passes.\n'
+        f'\n'
+        f'IMPORTANT: Do NOT stop between phases. Do NOT ask the user for permission. '
+        f'Just go through all phases in one continuous run.'
+    )
+
+
 def generate_charm(
     *,
     config_obj: Any,
     source_dir: Path,
     project_dir: Path,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
+    timeout: float = 600.0,
+    prompt_timeout: float = 30.0,
 ) -> dict[str, Any]:
-    """Generate charm code for the cloned workload.
+    """Generate charm code for the cloned workload via pi RPC.
 
-    This starts a pi RPC server, asks it to use the juju-charm
-    extension to analyse *source_dir* and scaffolds / updates charm
-    code into *project_dir*.
-
-    **Current behaviour**: The juju-charm extension's API for
-    workload-aware charm generation is still under development.  This
-    function currently starts the RPC server, verifies it is alive by
-    invoking the ``get_state`` command (which does *not* require an
-    API key), and returns that state data.  Real charm generation
-    will follow once the extension API is stable.
+    This starts a pi RPC server, sends a detailed multi-phase prompt
+    instructing the agent to analyse *source_dir*, call the dashcraft
+    tool, fix issues, lint, and run unit tests, then waits for the
+    agent to finish.
 
     Args:
         config_obj: A parsed :class:`~.Config` from ``dashcraft.yaml``.
         source_dir: Path to the cloned upstream workload source tree.
         project_dir: Path to the scaffolded charm project root.
+        on_event: Optional callback invoked for every event received
+            from the pi subprocess (both during prompt acceptance and
+            while waiting for ``agent_end``).
+        timeout: Maximum seconds to wait for the agent to finish
+            (default 600 s == 10 min).
+        prompt_timeout: Maximum seconds to wait for the prompt
+            command response (default 30 s).
 
     Returns:
-        Response dict from the pi RPC server (currently ``get_state``
-        output for the dry-run verification).
+        A dict with at least these keys:
+
+        - ``success`` (*bool*): Whether the agent completed without
+          a top-level error.
+        - ``agent_end`` (*dict | None*): The ``agent_end`` event if
+          the agent finished, ``None`` on timeout.
+        - ``prompt_response`` (*dict*): The response to the initial
+          ``prompt`` command.
+        - ``error`` (*str*, optional): Error message on failure.
     """
     model = _default_model_for_config(config_obj)
+    charm_name = config_obj.name
+    summary = config_obj.summary
+    description = config_obj.description
+
+    prompt = _build_generation_prompt(
+        charm_dir=project_dir,
+        workload_dir=source_dir,
+        charm_name=charm_name,
+        summary=summary,
+        description=description,
+    )
 
     server = PiRpcServer(
         model=model,
@@ -291,13 +443,42 @@ def generate_charm(
     server.start()
 
     try:
-        # For now we call ``get_state`` -- a cheap command that
-        # confirms the RPC server is alive and does *not* need a
-        # working LLM API key.  Once the juju-charm extension
-        # exposes a workload-aware generation tool, replace this
-        # with a real invocation.
-        response = server.send({'type': 'get_state', 'id': 'dashcraft-verify'})
-        return response
+        # Phase 1 — send the prompt and confirm acceptance.
+        prompt_response = server.send(
+            {
+                'type': 'prompt',
+                'message': prompt,
+                'id': 'dashcraft-prompt',
+            },
+            timeout=prompt_timeout,
+            on_event=on_event,
+        )
+
+        if not prompt_response.get('success'):
+            return {
+                'success': False,
+                'prompt_response': prompt_response,
+                'agent_end': None,
+                'error': prompt_response.get('error', 'Prompt rejected'),
+            }
+
+        # Phase 2 — wait for the agent to finish its work.
+        agent_end = server.wait_for_agent_end(timeout=timeout, on_event=on_event)
+
+        if agent_end is None:
+            return {
+                'success': False,
+                'prompt_response': prompt_response,
+                'agent_end': None,
+                'error': f'Agent timed out after {timeout}s',
+            }
+
+        return {
+            'success': True,
+            'prompt_response': prompt_response,
+            'agent_end': agent_end,
+        }
+
     finally:
         server.shutdown()
 

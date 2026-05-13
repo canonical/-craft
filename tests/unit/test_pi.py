@@ -7,12 +7,18 @@ import json
 import subprocess
 from pathlib import Path
 from textwrap import dedent
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from dashcraft.config import load_config
-from dashcraft.pi import PiRpcServer, _default_model_for_config, generate_charm
+from dashcraft.pi import (
+    PiRpcServer,
+    _build_generation_prompt,
+    _default_model_for_config,
+    generate_charm,
+)
 from tests.unit.helpers import MINIMAL_CONFIG, make_config
 
 # ---------------------------------------------------------------------------
@@ -239,6 +245,66 @@ class TestPiRpcServerContextManager:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# _build_generation_prompt
+# ---------------------------------------------------------------------------
+
+
+class TestBuildGenerationPrompt:
+    """Tests for the _build_generation_prompt helper."""
+
+    def test_includes_charm_name(self, tmp_path: Path) -> None:
+        prompt = _build_generation_prompt(
+            charm_dir=tmp_path / 'charm',
+            workload_dir=tmp_path / 'source',
+            charm_name='my-awesome-charm',
+        )
+        assert 'my-awesome-charm' in prompt
+
+    def test_includes_summary_and_description(self, tmp_path: Path) -> None:
+        prompt = _build_generation_prompt(
+            charm_dir=tmp_path / 'charm',
+            workload_dir=tmp_path / 'source',
+            charm_name='test',
+            summary='A cool charm',
+            description='Does great things',
+        )
+        assert 'A cool charm' in prompt
+        assert 'Does great things' in prompt
+
+    def test_omits_empty_summary_and_description(self, tmp_path: Path) -> None:
+        prompt = _build_generation_prompt(
+            charm_dir=tmp_path / 'charm',
+            workload_dir=tmp_path / 'source',
+            charm_name='test',
+        )
+        assert 'Summary:' not in prompt
+        assert 'Description:' not in prompt
+
+    def test_includes_phase_structure(self, tmp_path: Path) -> None:
+        prompt = _build_generation_prompt(
+            charm_dir=tmp_path / 'charm',
+            workload_dir=tmp_path / 'source',
+            charm_name='test',
+        )
+        assert 'Phase 1: Initial research' in prompt
+        assert 'Phase 2: Fix structural issues' in prompt
+        assert 'Phase 3: Lint and fix' in prompt
+        assert 'Phase 4: Unit tests and fix' in prompt
+        assert 'Phase 5: Load skills for quality' in prompt
+        assert 'Phase 6: Final validation' in prompt
+
+    def test_includes_dashcraft_tool_call(self, tmp_path: Path) -> None:
+        prompt = _build_generation_prompt(
+            charm_dir=tmp_path / 'charm',
+            workload_dir=tmp_path / 'source',
+            charm_name='test',
+        )
+        assert 'dashcraft tool' in prompt
+        assert str(tmp_path / 'charm') in prompt
+        assert str(tmp_path / 'source') in prompt
+
+
 def test_default_model_for_config_uses_set_model() -> None:
     """When config has a model set, that value is returned."""
     with make_config(MINIMAL_CONFIG) as cfg_path:
@@ -262,27 +328,38 @@ def test_default_model_for_config_falls_back() -> None:
 
 
 class TestGenerateCharm:
-    """Tests for generate_charm(). Currently a dry-run wrapper."""
+    """Tests for generate_charm() — sends a prompt and waits for agent."""
 
-    def test_calls_get_state_and_returns_response(self, tmp_path: Path) -> None:
-        """generate_charm starts server and returns its response."""
+    def _make_fake_proc(
+        self, prompt_response: dict, agent_end_event: dict | None = None
+    ) -> MagicMock:
+        """Create a mock Popen that streams prompt_response then agent_end."""
+        lines = [json.dumps(prompt_response)]
+        if agent_end_event is not None:
+            lines.append(json.dumps(agent_end_event))
+        mock = MagicMock(spec=subprocess.Popen)
+        mock.poll.return_value = None
+        mock.stdin = MagicMock()
+        mock.stdout = io.StringIO('\n'.join(lines) + '\n')
+        mock.stderr = io.StringIO('')
+        return mock
+
+    def test_sends_prompt_and_returns_success(self, tmp_path: Path) -> None:
+        """generate_charm sends prompt, waits for agent_end, returns success."""
         source_dir = tmp_path / 'source'
+        source_dir.mkdir()
         project_dir = tmp_path / 'charm'
         project_dir.mkdir()
 
-        fake_response = {
+        prompt_resp = {
             'type': 'response',
-            'id': 'dashcraft-verify',
+            'id': 'dashcraft-prompt',
+            'command': 'prompt',
             'success': True,
-            'data': {'isStreaming': False},
         }
+        agent_end = {'type': 'agent_end', 'messages': []}
 
-        # Build a fake Popen that serves our canned response.
-        mock_proc = MagicMock(spec=subprocess.Popen)
-        mock_proc.poll.return_value = None
-        mock_proc.stdin = MagicMock()
-        mock_proc.stdout = io.StringIO(json.dumps(fake_response) + '\n')
-        mock_proc.stderr = io.StringIO('')
+        mock_proc = self._make_fake_proc(prompt_resp, agent_end)
 
         with patch('dashcraft.pi.subprocess.Popen', return_value=mock_proc):
             with make_config(MINIMAL_CONFIG) as cfg_path:
@@ -293,26 +370,102 @@ class TestGenerateCharm:
                     project_dir=project_dir,
                 )
 
-        assert result == fake_response
+        assert result['success'] is True
+        assert result['prompt_response'] == prompt_resp
+        assert result['agent_end'] == agent_end
+
+    def test_prompt_response_contains_correct_prompt(self, tmp_path: Path) -> None:
+        """The sent prompt includes charm name, source dir, and project dir."""
+        source_dir = tmp_path / 'source'
+        source_dir.mkdir()
+        project_dir = tmp_path / 'charm'
+        project_dir.mkdir()
+
+        prompt_resp = {
+            'type': 'response',
+            'id': 'dashcraft-prompt',
+            'command': 'prompt',
+            'success': True,
+        }
+        agent_end = {'type': 'agent_end', 'messages': []}
+        mock_proc = self._make_fake_proc(prompt_resp, agent_end)
+
+        with make_config(MINIMAL_CONFIG) as cfg_path:
+            config = load_config(cfg_path)
+
+        captured_cmd: list[dict] = []
+
+        def fake_popen(cmd: list[str], **kw: object) -> MagicMock:
+            return mock_proc
+
+        with patch('dashcraft.pi.subprocess.Popen', side_effect=fake_popen):
+            # Override stdin.write to capture the prompt
+            original_write = mock_proc.stdin.write
+
+            def capture_write(line: str) -> None:
+                captured_cmd.append(json.loads(line))
+                return original_write(line)
+
+            mock_proc.stdin.write = MagicMock(side_effect=capture_write)
+
+            generate_charm(
+                config_obj=config,
+                source_dir=source_dir,
+                project_dir=project_dir,
+            )
+
+        assert len(captured_cmd) >= 1
+        sent_prompt = captured_cmd[0]
+        assert sent_prompt['type'] == 'prompt'
+        assert 'my-charm' in sent_prompt['message']  # charm name from config
+        assert str(source_dir) in sent_prompt['message']
+        assert str(project_dir) in sent_prompt['message']
+
+    def test_returns_failure_when_prompt_rejected(self, tmp_path: Path) -> None:
+        """If prompt response has success=False, generate_charm reports failure."""
+        source_dir = tmp_path / 'source'
+        source_dir.mkdir()
+        project_dir = tmp_path / 'charm'
+        project_dir.mkdir()
+
+        prompt_resp = {
+            'type': 'response',
+            'id': 'dashcraft-prompt',
+            'command': 'prompt',
+            'success': False,
+            'error': 'no API key',
+        }
+
+        mock_proc = self._make_fake_proc(prompt_resp)
+
+        with patch('dashcraft.pi.subprocess.Popen', return_value=mock_proc):
+            with make_config(MINIMAL_CONFIG) as cfg_path:
+                config = load_config(cfg_path)
+                result = generate_charm(
+                    config_obj=config,
+                    source_dir=source_dir,
+                    project_dir=project_dir,
+                )
+
+        assert result['success'] is False
+        assert result['error'] == 'no API key'
+        assert result['prompt_response'] == prompt_resp
 
     def test_generates_with_config_model(self, tmp_path: Path) -> None:
         """The model from config is passed to PiRpcServer."""
         source_dir = tmp_path / 'source'
+        source_dir.mkdir()
         project_dir = tmp_path / 'charm'
         project_dir.mkdir()
 
-        fake_response = {
+        prompt_resp = {
             'type': 'response',
-            'id': 'dashcraft-verify',
+            'id': 'dashcraft-prompt',
+            'command': 'prompt',
             'success': True,
-            'data': {},
         }
-
-        mock_proc = MagicMock(spec=subprocess.Popen)
-        mock_proc.poll.return_value = None
-        mock_proc.stdin = MagicMock()
-        mock_proc.stdout = io.StringIO(json.dumps(fake_response) + '\n')
-        mock_proc.stderr = io.StringIO('')
+        agent_end = {'type': 'agent_end', 'messages': []}
+        mock_proc = self._make_fake_proc(prompt_resp, agent_end)
 
         with make_config(MINIMAL_CONFIG) as cfg_path:
             config = load_config(cfg_path)
@@ -320,7 +473,6 @@ class TestGenerateCharm:
         captured_model: list[str] = []
 
         def fake_popen(cmd: list[str], **kw: object) -> MagicMock:
-            # Capture the --model value.
             if '--model' in cmd:
                 idx = cmd.index('--model')
                 captured_model.append(cmd[idx + 1])
@@ -338,12 +490,12 @@ class TestGenerateCharm:
     def test_raises_runtime_error_on_server_failure(self, tmp_path: Path) -> None:
         """If the server is not running, generate_charm raises RuntimeError."""
         source_dir = tmp_path / 'source'
+        source_dir.mkdir()
         project_dir = tmp_path / 'charm'
         project_dir.mkdir()
 
-        # Make Popen create a process that is immediately dead.
         mock_proc = MagicMock(spec=subprocess.Popen)
-        mock_proc.poll.return_value = 1  # exited.
+        mock_proc.poll.return_value = 1  # immediately dead.
         mock_proc.stdin = MagicMock()
         mock_proc.stdout = io.StringIO('')
         mock_proc.stderr = io.StringIO('error')
@@ -358,3 +510,93 @@ class TestGenerateCharm:
                     source_dir=source_dir,
                     project_dir=project_dir,
                 )
+
+    def test_returns_timeout_on_agent_timeout(self, tmp_path: Path) -> None:
+        """If agent_end is never received, returns a timeout error."""
+        source_dir = tmp_path / 'source'
+        source_dir.mkdir()
+        project_dir = tmp_path / 'charm'
+        project_dir.mkdir()
+
+        # Only a prompt response — no agent_end, then process exits.
+        prompt_resp = {
+            'type': 'response',
+            'id': 'dashcraft-prompt',
+            'command': 'prompt',
+            'success': True,
+        }
+        mock_proc = MagicMock(spec=subprocess.Popen)
+        mock_proc.stdin = MagicMock()
+        # Only the prompt response — no agent_end follows.
+        # After the prompt_resp line is consumed, stdout is exhausted.
+        mock_proc.stdout = io.StringIO(json.dumps(prompt_resp) + '\n')
+        mock_proc.stderr = io.StringIO('')
+
+        # poll() returns None while send() reads the prompt response,
+        # then returns 0 so events() stops yielding (no more data).
+        # Needs many calls because send(), events(), and shutdown()
+        # all call poll().
+        poll_calls = iter([None, None, None, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+        mock_proc.poll.side_effect = lambda: next(poll_calls, 0)
+
+        with make_config(MINIMAL_CONFIG) as cfg_path:
+            config = load_config(cfg_path)
+
+        with patch('dashcraft.pi.subprocess.Popen', return_value=mock_proc):
+            result = generate_charm(
+                config_obj=config,
+                source_dir=source_dir,
+                project_dir=project_dir,
+                timeout=0.5,
+            )
+
+        assert result['success'] is False
+        assert result.get('agent_end') is None
+
+    def test_on_event_callback_receives_events(self, tmp_path: Path) -> None:
+        """The on_event callback gets called for events during both phases."""
+        source_dir = tmp_path / 'source'
+        source_dir.mkdir()
+        project_dir = tmp_path / 'charm'
+        project_dir.mkdir()
+
+        prompt_resp = {
+            'type': 'response',
+            'id': 'dashcraft-prompt',
+            'command': 'prompt',
+            'success': True,
+        }
+        agent_start = {'type': 'agent_start'}
+        agent_end = {'type': 'agent_end', 'messages': []}
+
+        mock_proc = MagicMock(spec=subprocess.Popen)
+        mock_proc.poll.return_value = None
+        mock_proc.stdin = MagicMock()
+        # All events in one stream — prompt_resp, then agent_start, then agent_end
+        mock_proc.stdout = io.StringIO(
+            json.dumps(prompt_resp)
+            + '\n'
+            + json.dumps(agent_start)
+            + '\n'
+            + json.dumps(agent_end)
+            + '\n'
+        )
+        mock_proc.stderr = io.StringIO('')
+
+        events_seen: list[dict[str, Any]] = []
+
+        with patch('dashcraft.pi.subprocess.Popen', return_value=mock_proc):
+            with make_config(MINIMAL_CONFIG) as cfg_path:
+                config = load_config(cfg_path)
+                generate_charm(
+                    config_obj=config,
+                    source_dir=source_dir,
+                    project_dir=project_dir,
+                    on_event=events_seen.append,
+                )
+
+        # Should have seen the response, agent_start, and agent_end
+        event_types = [e.get('type') for e in events_seen]
+        assert 'response' in event_types
+        assert 'agent_start' in event_types
+        assert 'agent_end' in event_types

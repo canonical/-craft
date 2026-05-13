@@ -71,7 +71,7 @@ class TestMain:
         captured = capsys.readouterr()
         assert 'my-charm' in captured.out
         assert 'Cloned upstream to:' in captured.out
-        assert 'Charm generation phase complete' in captured.out
+        assert 'Charm generation complete' in captured.err
 
     def test_pack_fails_on_missing_config(self, capsys) -> None:
         with patch.object(sys, 'argv', ['dashcraft', '--project-dir', '/nonexistent', 'pack']):
@@ -120,7 +120,7 @@ class TestMain:
         captured = capsys.readouterr()
         assert 'my-charm' in captured.out
         assert 'directory will not be cleaned up' in captured.out
-        assert 'Charm generation phase complete' in captured.out
+        assert 'Charm generation complete' in captured.err
 
     def test_pack_handles_generate_charm_error(self, capsys, monkeypatch) -> None:
         """generate_charm raises RuntimeError; pack returns 1."""
@@ -195,9 +195,9 @@ class TestMain:
             ):
                 ret = main()
 
-        assert ret == 0
+        assert ret == 1
         captured = capsys.readouterr()
-        assert 'pi is ready' in captured.out
+        assert 'Skipping AI charm generation' in captured.err
 
 
 class TestCheckPi:

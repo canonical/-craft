@@ -8,11 +8,64 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from dashcraft.config import ConfigError, load_config
 from dashcraft.pi import generate_charm
 from dashcraft.templates import get_files
 from dashcraft.upstream import CloneError, clone_upstream_persistent
+
+
+def _pi_event_handler(event: dict[str, Any]) -> None:
+    """Default on_event callback for streaming pi RPC progress to the user."""
+    etype = event.get('type', '')
+
+    if etype == 'response':
+        cmd = event.get('command', '?')
+        ok = event.get('success', False)
+        if cmd == 'prompt':
+            if ok:
+                print('  [pi] Prompt accepted — agent is working...', file=sys.stderr)
+            else:
+                err = event.get('error', 'unknown')
+                print(f'  [pi] Prompt rejected: {err}', file=sys.stderr)
+
+    elif etype == 'agent_start':
+        print('  [pi] Agent started.', file=sys.stderr)
+
+    elif etype == 'tool_execution_start':
+        tname = event.get('toolName', '?')
+        print(f'  [pi] 🔧 {tname}…', file=sys.stderr)
+
+    elif etype == 'tool_execution_end':
+        tname = event.get('toolName', '?')
+        is_err = event.get('isError', False)
+        status = '❌ FAILED' if is_err else '✓'
+        print(f'  [pi] {status} {tname}', file=sys.stderr)
+
+    elif etype == 'tool_execution_update':
+        for block in event.get('partialResult', {}).get('content', []):
+            if block.get('type') == 'text' and block.get('text', '').strip():
+                # Only show non-empty tool progress
+                text = block['text'].strip()
+                lines = text.split('\n')
+                # Show just the last line for brevity
+                last_line = lines[-1][:120]
+                if last_line:
+                    print(f'    {last_line}', file=sys.stderr)
+
+    elif etype == 'message_update':
+        delta = event.get('assistantMessageEvent', {})
+        if delta.get('type') == 'text_delta':
+            sys.stdout.write(delta['delta'])
+            sys.stdout.flush()
+
+    elif etype == 'agent_end':
+        print('\n  [pi] Agent finished.', file=sys.stderr)
+
+    elif etype == 'extension_error':
+        err = event.get('error', 'unknown')
+        print(f'  [pi] Extension error: {err}', file=sys.stderr)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -82,9 +135,6 @@ def _cmd_pack(args: argparse.Namespace) -> int:
         print(f'Error: {e}', file=sys.stderr)
         return 1
 
-    # TODO: Analyze source, generate charm
-    print('Upstream source ready. (Charm generation not yet implemented.)')
-
     # Step 3: Scaffold charm files if charmcraft.yaml doesn't exist
     if not (project_dir / 'charmcraft.yaml').exists():
         scaffold_ret = _do_scaffold(project_dir, config.name, charm_part.workload)
@@ -94,30 +144,34 @@ def _cmd_pack(args: argparse.Namespace) -> int:
 
     # Step 4: Check if pi is available and generate charm code.
     pi_check_ret = _check_pi_installed()
-    if pi_check_ret == 0:
-        # pi installed AND API key configured -> generate charm
-        print('Generating charm code via pi RPC server...')
-        try:
-            gen_result = generate_charm(
-                config_obj=config,
-                source_dir=source_dir,
-                project_dir=project_dir,
-            )
-            if gen_result.get('success'):
-                print('Charm generation phase complete.')
-            else:
-                err = gen_result.get('error', 'unknown error')
-                print(
-                    f'Warning: charm generation returned an issue: {err}',
-                    file=sys.stderr,
-                )
-        except RuntimeError as e:
-            print(f'Error: AI charm generation failed: {e}', file=sys.stderr)
-            _cleanup_source(source_dir, args.keep_source)
-            return 1
-    else:
-        # pi not installed or no API key -- skip generation for now
-        print('pi is ready. AI charm generation coming soon.')
+    if pi_check_ret != 0:
+        print('Skipping AI charm generation.', file=sys.stderr)
+        _cleanup_source(source_dir, args.keep_source)
+        return 1
+
+    print('Generating charm code via pi RPC...')
+    print(f'  Charm dir:    {project_dir}', file=sys.stderr)
+    print(f'  Workload dir: {source_dir}', file=sys.stderr)
+
+    try:
+        gen_result = generate_charm(
+            config_obj=config,
+            source_dir=source_dir,
+            project_dir=project_dir,
+            on_event=_pi_event_handler,
+        )
+    except RuntimeError as e:
+        print(f'Error: AI charm generation failed: {e}', file=sys.stderr)
+        _cleanup_source(source_dir, args.keep_source)
+        return 1
+
+    if not gen_result.get('success'):
+        err = gen_result.get('error', 'unknown error')
+        print(f'Error: Charm generation failed: {err}', file=sys.stderr)
+        _cleanup_source(source_dir, args.keep_source)
+        return 1
+
+    print('\nCharm generation complete.', file=sys.stderr)
 
     _cleanup_source(source_dir, args.keep_source)
     return 0
