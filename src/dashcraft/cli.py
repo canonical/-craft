@@ -55,7 +55,7 @@ def main() -> int:
 
 
 def _cmd_pack(args: argparse.Namespace) -> int:
-    """Execute the 'pack' command — scaffold, lint, test, and pack."""
+    """Execute the 'pack' command — scaffold and pack."""
     project_dir = args.project_dir
     config_path = project_dir / CONFIG_FILENAME
 
@@ -94,19 +94,7 @@ def _cmd_pack(args: argparse.Namespace) -> int:
             _cleanup_source(source_dir, args.keep_source)
             return scaffold_ret
 
-    # Step 4: Lint
-    print('Running lint checks...')
-    lint_ret = _do_lint(project_dir)
-    if lint_ret != 0:
-        print('Warning: lint checks failed — continuing anyway')
-
-    # Step 5: Unit tests
-    print('Running unit tests...')
-    unit_ret = _do_unit_tests(project_dir)
-    if unit_ret != 0:
-        print('Warning: unit tests failed — continuing anyway')
-
-    # Step 6: Pack
+    # Step 4: Pack
     print('Packing charm...')
     pack_ret = _run_quickpack(project_dir)
 
@@ -191,48 +179,3 @@ def _is_valid_kebab_case(name: str) -> bool:
         return False
     allowed = set('abcdefghijklmnopqrstuvwxyz0123456789-')
     return all(c in allowed for c in name)
-
-
-def _do_lint(cwd: Path) -> int:
-    """Run lint checks via tox."""
-    tox = shutil.which('tox')
-    if not tox:
-        print(
-            'Warning: tox is not installed — skipping lint. Install it with: uv tool install tox',
-            file=sys.stderr,
-        )
-        return 0
-
-    try:
-        subprocess.run(
-            [tox, 'run', '-e', 'lint'],
-            cwd=cwd,
-            check=True,
-        )
-        return 0
-    except subprocess.CalledProcessError as e:
-        print(f'Lint failed: {e}', file=sys.stderr)
-        return 1
-
-
-def _do_unit_tests(cwd: Path) -> int:
-    """Run unit tests via tox."""
-    tox = shutil.which('tox')
-    if not tox:
-        print(
-            'Warning: tox is not installed — skipping unit tests. '
-            'Install it with: uv tool install tox',
-            file=sys.stderr,
-        )
-        return 0
-
-    try:
-        subprocess.run(
-            [tox, 'run', '-e', 'unit'],
-            cwd=cwd,
-            check=True,
-        )
-        return 0
-    except subprocess.CalledProcessError as e:
-        print(f'Unit tests failed: {e}', file=sys.stderr)
-        return 1

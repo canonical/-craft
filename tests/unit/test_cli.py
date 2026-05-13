@@ -65,8 +65,6 @@ class TestMain:
         assert 'my-charm' in captured.out
         assert 'Cloned upstream to:' in captured.out
         assert 'Upstream source ready' in captured.out
-        assert 'Running lint checks' in captured.out
-        assert 'Running unit tests' in captured.out
 
     def test_pack_fails_on_missing_config(self, capsys) -> None:
         with patch.object(sys, 'argv', ['dashcraft', '--project-dir', '/nonexistent', 'pack']):
