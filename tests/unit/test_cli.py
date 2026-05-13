@@ -52,6 +52,8 @@ class TestMain:
                 lambda cmd: (
                     '/usr/bin/git'
                     if cmd == 'git'
+                    else '/usr/local/bin/quickpack'
+                    if cmd == 'quickpack'
                     else '/usr/local/bin/pi'
                     if cmd == 'pi'
                     else None
@@ -101,6 +103,8 @@ class TestMain:
                 lambda cmd: (
                     '/usr/bin/git'
                     if cmd == 'git'
+                    else '/usr/local/bin/quickpack'
+                    if cmd == 'quickpack'
                     else '/usr/local/bin/pi'
                     if cmd == 'pi'
                     else None
@@ -288,3 +292,90 @@ class TestCleanupTmp:
         assert tmp_dir.exists()
         captured = capsys.readouterr()
         assert 'will not be cleaned up' in captured.out
+
+
+class TestFindCharmFile:
+    def test_returns_none_when_no_charm_file(self, tmp_path: Path) -> None:
+        from dashcraft.cli import _find_charm_file
+
+        result = _find_charm_file(tmp_path)
+        assert result is None
+
+    def test_finds_single_charm_file(self, tmp_path: Path) -> None:
+        from dashcraft.cli import _find_charm_file
+
+        charm_file = tmp_path / 'my-charm.charm'
+        charm_file.write_text('fake-charm')
+
+        result = _find_charm_file(tmp_path)
+        assert result == charm_file
+
+    def test_returns_most_recent_charm_file(self, tmp_path: Path) -> None:
+        import time
+
+        from dashcraft.cli import _find_charm_file
+
+        older = tmp_path / 'older.charm'
+        older.write_text('old')
+        time.sleep(0.01)
+        newer = tmp_path / 'newer.charm'
+        newer.write_text('new')
+
+        result = _find_charm_file(tmp_path)
+        assert result == newer
+
+
+class TestBuildDeployCommand:
+    def test_builds_with_no_resources(self, tmp_path: Path) -> None:
+        from dashcraft.cli import _build_deploy_command
+
+        charm_dir = tmp_path / 'charm'
+        charm_dir.mkdir()
+        charm_file = tmp_path / 'my-charm.charm'
+        charm_file.write_text('fake')
+
+        cmd = _build_deploy_command(charm_dir, charm_file, tmp_path)
+        assert cmd == f'juju deploy ./{charm_file.name}'
+
+    def test_builds_with_resources(self, tmp_path: Path) -> None:
+        from dashcraft.cli import _build_deploy_command
+
+        charm_dir = tmp_path / 'charm'
+        charm_dir.mkdir()
+        charmcraft_yaml = charm_dir / 'charmcraft.yaml'
+        charmcraft_yaml.write_text(
+            'resources:\n'
+            '  workload-image:\n'
+            '    type: oci-image\n'
+            '    description: OCI image\n'
+            '    upstream-source: myimage:latest\n'
+        )
+        charm_file = tmp_path / 'my-charm.charm'
+        charm_file.write_text('fake')
+
+        cmd = _build_deploy_command(charm_dir, charm_file, tmp_path)
+        assert 'juju deploy' in cmd
+        assert '--resource workload-image=myimage:latest' in cmd
+
+    def test_handles_missing_charmcraft_yaml(self, tmp_path: Path) -> None:
+        from dashcraft.cli import _build_deploy_command
+
+        charm_dir = tmp_path / 'charm'
+        charm_dir.mkdir()
+        charm_file = tmp_path / 'my-charm.charm'
+        charm_file.write_text('fake')
+
+        cmd = _build_deploy_command(charm_dir, charm_file, tmp_path)
+        assert cmd == f'juju deploy ./{charm_file.name}'
+
+    def test_uses_relative_path_when_outside_project_dir(self, tmp_path: Path) -> None:
+        from dashcraft.cli import _build_deploy_command
+
+        charm_dir = tmp_path / '.tmp' / 'charm'
+        charm_dir.mkdir(parents=True)
+        charm_file = charm_dir / 'my-charm.charm'
+        charm_file.write_text('fake')
+        project_dir = tmp_path
+
+        cmd = _build_deploy_command(charm_dir, charm_file, project_dir)
+        assert 'juju deploy ./.tmp/charm/my-charm.charm' in cmd

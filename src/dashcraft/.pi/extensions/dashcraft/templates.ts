@@ -328,6 +328,7 @@ export function skeletonSrcCharmPy(ctx: CharmTemplateContext): string {
     "logger = logging.getLogger(__name__)",
     "",
     'SERVICE_NAME = "workload"',
+    'CHECK_NAME = "service-ready"',
     "",
     "",
     `class ${ctx.className}(ops.CharmBase):`,
@@ -406,6 +407,7 @@ export function filledSrcCharmPy(ctx: CharmTemplateContext, analysis: WorkloadAn
   lines.push("logger = logging.getLogger(__name__)");
   lines.push("");
   lines.push('SERVICE_NAME = "workload"');
+  lines.push('CHECK_NAME = "service-ready"');
   lines.push("");
   lines.push("");
   lines.push(`class ${ctx.className}(ops.CharmBase):`);
@@ -449,18 +451,18 @@ export function filledSrcCharmPy(ctx: CharmTemplateContext, analysis: WorkloadAn
   if (analysis.envVars && Object.keys(analysis.envVars).length > 0) {
     lines.push('                    "environment": env,');
   }
-  lines.push("                }");
-  lines.push("            }");
+  lines.push("                },");
+  lines.push("            },");
   if (analysis.port) {
     lines.push('            "checks": {');
-    lines.push('                "ready": {');
+    lines.push("                CHECK_NAME: {");
     lines.push('                    "override": "replace",');
     lines.push('                    "level": "ready",');
     lines.push('                    "http": {');
     lines.push(`                        "url": "http://localhost:${analysis.port}",`);
-    lines.push("                    }");
-    lines.push("                }");
-    lines.push("            }");
+    lines.push("                    },");
+    lines.push("                },");
+    lines.push("            },");
   }
   lines.push("        }");
   lines.push('        self.container.add_layer("workload", layer, combine=True)');
@@ -1059,9 +1061,7 @@ export function unitTestCharm(ctx: CharmTemplateContext): string {
     "import pytest",
     "from ops import pebble, testing",
     "",
-    `from charm import SERVICE_NAME, ${ctx.className}`,
-    "",
-    'CHECK_NAME = "service-ready"',
+    `from charm import CHECK_NAME, SERVICE_NAME, ${ctx.className}`,
     "",
     "layer = pebble.Layer(",
     "    {",

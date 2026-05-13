@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from dashcraft.config import ConfigError, load_config
 from dashcraft.pi import generate_charm
 from dashcraft.templates import get_files
@@ -180,13 +182,25 @@ def _cmd_pack(args: argparse.Namespace) -> int:
 
     print('\nCharm generation complete.', file=sys.stderr)
 
-    # Step 6: Pack (unreachable for now — future work)
+    # Step 6: Pack
     print('Packing charm...')
     pack_ret = _run_quickpack(charm_dir)
+    if pack_ret != 0:
+        _cleanup_tmp(tmp_dir, args.keep_source)
+        return pack_ret
+
+    # Step 7: Print deploy command
+    charm_file = _find_charm_file(charm_dir)
+    if charm_file:
+        deploy_cmd = _build_deploy_command(charm_dir, charm_file, project_dir)
+        print(f'\nCharm packed successfully: {charm_file.name}')
+        print(f'Deploy with:\n  {deploy_cmd}')
+    else:
+        print('\nWarning: No .charm file found after packing.', file=sys.stderr)
 
     _cleanup_tmp(tmp_dir, args.keep_source)
 
-    return pack_ret
+    return 0
 
 
 def _ensure_clean_tmp(tmp_dir: Path) -> None:
@@ -288,6 +302,42 @@ def _do_scaffold(target_dir: Path, name: str, workload_image: str = '') -> int:
         print('Warning: uv not found — skipping uv.lock generation', file=sys.stderr)
 
     return 0
+
+
+def _find_charm_file(charm_dir: Path) -> Path | None:
+    """Find the generated .charm file in the charm directory."""
+    charm_files = sorted(charm_dir.glob('*.charm'))
+    if not charm_files:
+        return None
+    # Return the most recently created .charm file
+    return max(charm_files, key=lambda p: p.stat().st_mtime)
+
+
+def _build_deploy_command(charm_dir: Path, charm_file: Path, project_dir: Path) -> str:
+    """Build a juju deploy command string from the charm file and its metadata."""
+    # Determine the charm path relative to the project dir for the user
+    try:
+        rel_charm = charm_file.relative_to(project_dir)
+    except ValueError:
+        rel_charm = charm_file
+    charm_path = f'./{rel_charm}'
+
+    # Parse charmcraft.yaml for resources
+    resource_args: list[str] = []
+    charmcraft_yaml = charm_dir / 'charmcraft.yaml'
+    if charmcraft_yaml.exists():
+        with open(charmcraft_yaml) as f:
+            metadata = yaml.safe_load(f) or {}
+        resources = metadata.get('resources', {})
+        for res_name, res_def in resources.items():
+            if isinstance(res_def, dict):
+                upstream_source = res_def.get('upstream-source', '')
+            else:
+                upstream_source = ''
+            resource_args.append(f'--resource {res_name}={upstream_source}')
+
+    cmd_parts = ['juju deploy', charm_path, *resource_args]
+    return ' '.join(cmd_parts)
 
 
 def _check_pi_installed() -> int:

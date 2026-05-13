@@ -764,7 +764,7 @@ export default function (pi: ExtensionAPI) {
             content: [
               {
                 type: "text",
-                text: "Error: quickpack is not installed. Install it with: `sudo snap install quickpack --classic`",
+                text: "Error: quickpack is not installed. Install it with: `uv tool install juju-cantrip`",
               },
             ],
             details: { error: "quickpack_missing" },

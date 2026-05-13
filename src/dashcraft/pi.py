@@ -24,10 +24,6 @@ from typing import Any
 # Low-level subprocess manager
 # ---------------------------------------------------------------------------
 
-_EXTENSION_PATH = (
-    Path(__file__).resolve().parent / '.pi' / 'extensions' / 'juju-charm' / 'index.ts'
-)
-
 
 class PiRpcServer:
     """Manage a pi RPC subprocess.
@@ -106,7 +102,6 @@ class PiRpcServer:
             '--extension',
             self._extension,
         ]
-        print(cmd)
         if self._no_skills:
             cmd += ['--no-skills']
         if self._no_prompt_templates:
@@ -420,7 +415,7 @@ def _build_generation_prompt(
 
 
 def _resolve_extension_path(project_dir: Path) -> Path | None:
-    """Find the juju-charm extension for a project.
+    """Find the dashcraft extension for a project.
 
     Looks in *project_dir* first, then falls back to the bundled
     extension next to this module.
@@ -428,11 +423,14 @@ def _resolve_extension_path(project_dir: Path) -> Path | None:
     Returns the absolute path to ``index.ts``, or ``None`` if not
     found in either location.
     """
-    # First, look in the charm project directory (where dashcraft.yaml
-    # lives).  This is the expected location when the user has
-    # scaffolded the charm.
-    project_ext = project_dir / '.pi' / 'extensions' / 'dashcraft' / 'index.ts'
-    return project_ext
+    rel = Path('.pi') / 'extensions' / 'dashcraft' / 'index.ts'
+    project_ext = project_dir / rel
+    if project_ext.exists():
+        return project_ext
+    bundled_ext = Path(__file__).resolve().parent / rel
+    if bundled_ext.exists():
+        return bundled_ext
+    return None
 
 
 def generate_charm(
@@ -490,6 +488,16 @@ def generate_charm(
     )
 
     extension = _resolve_extension_path(project_dir)
+    if extension is None:
+        return {
+            'success': False,
+            'prompt_response': {},
+            'agent_end': None,
+            'error': (
+                'Could not find dashcraft pi extension in either '
+                f'{project_dir}/.pi or alongside the dashcraft package.'
+            ),
+        }
     server = PiRpcServer(
         model=model,
         work_dir=project_dir,
