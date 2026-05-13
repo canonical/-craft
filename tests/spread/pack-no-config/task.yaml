@@ -1,0 +1,24 @@
+summary: dashcraft pack errors when dashcraft.yaml is missing
+systems:
+  - ubuntu-24.04
+
+execute: |
+  local work_dir="/root/work-no-config"
+  rm -rf "$work_dir"
+  mkdir -p "$work_dir"
+
+  # No dashcraft.yaml in this directory — should fail gracefully.
+  rc=0
+  OUTPUT="$(dashcraft pack --project-dir "$work_dir" 2>&1)" || rc=$?
+  echo "$OUTPUT"
+
+  if [[ $rc -eq 0 ]]; then
+    echo "FAIL: Expected non-zero exit code" >&2
+    rm -rf "$work_dir"
+    exit 1
+  fi
+
+  echo "$OUTPUT" | MATCH 'not found'
+
+  # Clean up.
+  rm -rf "$work_dir"

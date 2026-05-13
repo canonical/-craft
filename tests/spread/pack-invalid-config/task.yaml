@@ -1,0 +1,32 @@
+summary: dashcraft pack rejects an invalid dashcraft.yaml
+systems:
+  - ubuntu-24.04
+
+execute: |
+  local work_dir="/root/work-invalid-config"
+  rm -rf "$work_dir"
+  mkdir -p "$work_dir"
+
+  # Missing required 'upstream' field in the charm part.
+  cat > "$work_dir/dashcraft.yaml" << 'EOF'
+  name: invalid-charm
+  type: charm
+  parts:
+    charm:
+      plugin: -craft
+  EOF
+
+  rc=0
+  OUTPUT="$(dashcraft pack --project-dir "$work_dir" 2>&1)" || rc=$?
+  echo "$OUTPUT"
+
+  if [[ $rc -eq 0 ]]; then
+    echo "FAIL: Expected non-zero exit code" >&2
+    rm -rf "$work_dir"
+    exit 1
+  fi
+
+  echo "$OUTPUT" | MATCH "'upstream' is required"
+
+  # Clean up.
+  rm -rf "$work_dir"

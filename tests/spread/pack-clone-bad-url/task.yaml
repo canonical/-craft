@@ -1,0 +1,35 @@
+summary: dashcraft pack fails gracefully with an invalid upstream URL
+systems:
+  - ubuntu-24.04
+
+execute: |
+  local work_dir="/root/work-clone-bad-url"
+  rm -rf "$work_dir"
+  mkdir -p "$work_dir"
+
+  cat > "$work_dir/dashcraft.yaml" << 'EOF'
+  name: bad-upstream
+  summary: Test with invalid upstream
+  description: Verifies graceful error for bad git URL
+  type: charm
+
+  parts:
+    charm:
+      plugin: -craft
+      upstream: https://github.com/dashcraft-test-user/this-repo-definitely-does-not-exist.git
+      model: gpt-4
+  EOF
+
+  # dashcraft pack should exit non-zero with a clear error.
+  rc=0
+  dashcraft pack --project-dir "$work_dir" 2>&1 || rc=$?
+  echo "Exit code: $rc"
+
+  if [[ $rc -eq 0 ]]; then
+    echo "FAIL: Expected non-zero exit code" >&2
+    rm -rf "$work_dir"
+    exit 1
+  fi
+
+  # Clean up.
+  rm -rf "$work_dir"

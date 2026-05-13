@@ -8,9 +8,9 @@ environment:
   WORKLOAD_IMAGE: ghcr.io/johnwarne/upvote-rss:latest
 
 execute: |
-  source "$SPREAD_PATH/tests/charm-helpers.sh"
+  source "$SPREAD_PATH/tests/spread/charm-helpers.sh"
   pack_and_deploy
 
 restore: |
-  source "$SPREAD_PATH/tests/charm-helpers.sh"
+  source "$SPREAD_PATH/tests/spread/charm-helpers.sh"
   cleanup

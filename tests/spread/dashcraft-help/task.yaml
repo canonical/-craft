@@ -1,0 +1,7 @@
+summary: dashcraft --help shows available commands
+systems:
+  - ubuntu-24.04
+
+execute: |
+  dashcraft --help | MATCH 'AI-powered charm generator'
+  dashcraft --help | MATCH pack

@@ -16,7 +16,7 @@ backends:
       MEM="${MEM:-8}"
 
       cloud_config="$(mktemp)"
-      sed "s|SPREAD_PASSWORD|$SPREAD_PASSWORD|g" tests/cloud-config.yaml > "$cloud_config"
+      sed "s|SPREAD_PASSWORD|$SPREAD_PASSWORD|g" tests/spread/cloud-config.yaml > "$cloud_config"
 
       lxc launch --vm \
         "ubuntu:${BASE}" \
@@ -67,7 +67,7 @@ backends:
           workers: 1
 
 suites:
-  tests/:
+  tests/spread/:
     summary: Spread tests
 
 exclude:
@@ -92,11 +92,17 @@ prepare: |
   sudo concierge prepare -p microk8s
 
   # If a dashcraft binary was uploaded alongside the tree, put it on PATH.
-  # Otherwise tests fail at `dashcraft charm-init` — the intended failure
-  # point until the CLI exists.
+  # Otherwise, build and install from source so integration tests can run.
   if [[ -f "$SPREAD_PATH/dashcraft" ]]; then
     chmod a+x "$SPREAD_PATH/dashcraft"
     sudo cp "$SPREAD_PATH/dashcraft" /usr/local/bin/dashcraft
+  else
+    snap install uv --classic
+    cd "$SPREAD_PATH"
+    uv venv --system-site-packages
+    . .venv/bin/activate
+    uv pip install -e .
+    ln -sf "$(pwd)/.venv/bin/dashcraft" /usr/local/bin/dashcraft
   fi
 
 restore: |

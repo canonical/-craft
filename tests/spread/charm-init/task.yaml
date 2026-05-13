@@ -6,7 +6,7 @@ environment:
   NAME: init-smoke
 
 execute: |
-  source "$SPREAD_PATH/tests/charm-helpers.sh"
+  source "$SPREAD_PATH/tests/spread/charm-helpers.sh"
   scaffold_charm
 
   # `scaffold_charm` leaves us in the charm dir.
@@ -15,5 +15,5 @@ execute: |
   done
 
 restore: |
-  source "$SPREAD_PATH/tests/charm-helpers.sh"
+  source "$SPREAD_PATH/tests/spread/charm-helpers.sh"
   cleanup
