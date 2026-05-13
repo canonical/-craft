@@ -40,10 +40,10 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 # Four demos, each on a different OpenRouter-routed provider.
 #   name | openrouter-model | upstream git url | oci workload image
 DEMOS=(
-    "upvote-rss|anthropic/claude-sonnet-4.6|https://github.com/johnwarne/upvote-rss.git|ghcr.io/johnwarne/upvote-rss:latest"
-    "suite-docs|openai/gpt-5|https://github.com/suitenumerique/docs.git|ghcr.io/suitenumerique/docs-backend:latest"
-    "booklore|google/gemini-2.5-pro|https://github.com/booklore-app/booklore.git|ghcr.io/booklore-app/booklore:latest"
-    "ironcalc|x-ai/grok-4|https://github.com/ironcalc/IronCalc.git|ghcr.io/ironcalc/ironcalc:latest"
+    "upvote-rss|qwen/qwen3.6-max-preview|https://github.com/johnwarne/upvote-rss.git|ghcr.io/johnwarne/upvote-rss:latest"
+    "suite-docs|google/gemma-4-31b-it|https://github.com/suitenumerique/docs.git|ghcr.io/suitenumerique/docs-backend:latest"
+    "booklore|deepseek/deepseek-v4-pro|https://github.com/booklore-app/booklore.git|ghcr.io/booklore-app/booklore:latest"
+    "ironcalc|moonshotai/kimi-latest|https://github.com/ironcalc/IronCalc.git|ghcr.io/ironcalc/ironcalc:latest"
 )
 
 SESSION="${DASHCRAFT_DEMO_SESSION:-dashcraft-demo}"
@@ -52,7 +52,7 @@ TMUX_SOCKET="${DASHCRAFT_DEMO_SOCKET:-dashcraft-demo}"
 # share a dedicated socket — a freshly-forked server inherits our env, which
 # matters for OPENROUTER_API_KEY and any other vars the panes need.
 tmux() { command tmux -L "$TMUX_SOCKET" "$@"; }
-JUJU_MODEL="${JUJU_MODEL:-dashcraft-demo}"
+JUJU_MODEL="cos"
 COLS="${COLS:-220}"
 ROWS="${ROWS:-64}"
 OUTPUT="${OUTPUT:-$SCRIPT_DIR/dashcraft-demo.cast}"
@@ -141,7 +141,8 @@ ensure_juju_model
 # Work area
 # ---------------------------------------------------------------------------
 
-DEMO_RUN_DIR="$(mktemp -d -t dashcraft-demo.XXXXXX)"
+mkdir -p /home/ubuntu/tmp
+DEMO_RUN_DIR="$(mktemp -d -p /home/ubuntu/tmp dashcraft-demo.XXXXXX)"
 SENTINEL_DIR="$DEMO_RUN_DIR/sentinels"
 mkdir -p "$SENTINEL_DIR"
 echo "Work dir: $DEMO_RUN_DIR"
@@ -178,8 +179,9 @@ tmux -f "$TMUX_CONF" new-session -d -s "$SESSION" -x "$COLS" -y "$ROWS"
 # Split the window into the six panes described in the header diagram.
 TOP_LEFT=$(tmux list-panes -t "$SESSION" -F '#{pane_id}' | head -1)
 
-# 1. Carve off the bottom 25% for the monitoring row.
-MON_LEFT=$(tmux split-window -P -F '#{pane_id}' -v -l '25%' -t "$TOP_LEFT")
+# 1. Carve off the bottom third for the monitoring row so all 3 rows are
+#    roughly equal height.
+MON_LEFT=$(tmux split-window -P -F '#{pane_id}' -v -l '34%' -t "$TOP_LEFT")
 
 # 2. Split the top region into 2 columns, then each column into 2 rows.
 TOP_RIGHT=$(tmux split-window -P -F '#{pane_id}' -h -p 50 -t "$TOP_LEFT")

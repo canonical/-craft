@@ -24,7 +24,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 
 import {
   allFiles,
@@ -60,28 +60,89 @@ function dashcraftAvailable(): boolean {
   }
 }
 
-/** Run a quickpack command and return { ok, stdout, stderr }. */
+/**
+ * Spawn *cmd* with *args*, streaming each output line through *onLine*
+ * (typically wired to the tool's `onUpdate` so the CLI can show live
+ * progress for long-running commands). Resolves with the full transcript
+ * and the exit-code-derived ok flag once the process exits.
+ *
+ * Handles AbortSignal (SIGTERM) and a millisecond timeout (SIGKILL).
+ */
+function streamProcess(
+  cmd: string,
+  args: string[],
+  options: {
+    cwd: string;
+    timeoutMs: number;
+    signal?: AbortSignal;
+    onLine?: (line: string) => void;
+  },
+): Promise<{ ok: boolean; output: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, {
+      cwd: options.cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let output = "";
+    let stdoutBuf = "";
+    let stderrBuf = "";
+
+    const consume = (buf: string, isErr: boolean): string => {
+      const lines = buf.split(/\r?\n/);
+      const remainder = lines.pop() ?? "";
+      for (const line of lines) {
+        output += (isErr ? "[stderr] " : "") + line + "\n";
+        if (line.trim()) options.onLine?.(line);
+      }
+      return remainder;
+    };
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdoutBuf = consume(stdoutBuf + chunk.toString("utf-8"), false);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderrBuf = consume(stderrBuf + chunk.toString("utf-8"), true);
+    });
+
+    const timeoutId = setTimeout(() => {
+      try { child.kill("SIGKILL"); } catch {}
+    }, options.timeoutMs);
+
+    const abortHandler = () => {
+      try { child.kill("SIGTERM"); } catch {}
+    };
+    options.signal?.addEventListener("abort", abortHandler);
+
+    child.on("close", (code) => {
+      clearTimeout(timeoutId);
+      options.signal?.removeEventListener("abort", abortHandler);
+      // Flush trailing partial lines.
+      if (stdoutBuf) { output += stdoutBuf + "\n"; if (stdoutBuf.trim()) options.onLine?.(stdoutBuf); }
+      if (stderrBuf) { output += "[stderr] " + stderrBuf + "\n"; if (stderrBuf.trim()) options.onLine?.(stderrBuf); }
+      resolve({ ok: code === 0, output: output.trim() });
+    });
+    child.on("error", (err) => {
+      clearTimeout(timeoutId);
+      options.signal?.removeEventListener("abort", abortHandler);
+      output += `[error] ${err.message}\n`;
+      resolve({ ok: false, output: output.trim() });
+    });
+  });
+}
+
+/** Run a quickpack command, streaming output line-by-line. */
 function runQuickpack(
   args: string[],
-  cwd?: string,
-  options?: { timeout?: number; signal?: AbortSignal },
-): { ok: boolean; stdout: string; stderr: string } {
-  try {
-    const output = execSync(`quickpack ${args.join(" ")}`, {
-      cwd,
-      encoding: "utf-8",
-      timeout: options?.timeout ?? 300_000,
-      signal: options?.signal,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    return { ok: true, stdout: output.trim(), stderr: "" };
-  } catch (err: any) {
-    return {
-      ok: false,
-      stdout: err.stdout || "",
-      stderr: err.stderr || err.message || String(err),
-    };
-  }
+  cwd: string,
+  options: { timeoutMs?: number; signal?: AbortSignal; onLine?: (line: string) => void },
+): Promise<{ ok: boolean; output: string }> {
+  return streamProcess("quickpack", args, {
+    cwd,
+    timeoutMs: options.timeoutMs ?? 300_000,
+    signal: options.signal,
+    onLine: options.onLine,
+  });
 }
 
 /** Run a dashcraft CLI command and return { ok, stdout, stderr }. */
@@ -109,7 +170,8 @@ function runDashcraft(
 }
 
 /**
- * Run `uv <args>` in *cwd* and merge stdout+stderr into a single transcript.
+ * Run `uv <args>` in *cwd*, streaming each output line through *onLine*
+ * and resolving with the full transcript + exit-derived ok flag.
  *
  * Used by charm_lint / charm_test_unit / charm_test_integration to bypass
  * tox — `uv run --group <name>` resolves the right dependency group from
@@ -121,21 +183,9 @@ function runUv(
   cwd: string,
   timeoutMs: number,
   signal?: AbortSignal,
-): { ok: boolean; output: string } {
-  try {
-    const out = execSync(`uv ${args.join(" ")}`, {
-      cwd,
-      encoding: "utf-8",
-      timeout: timeoutMs,
-      signal,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    return { ok: true, output: (out || "").trim() };
-  } catch (err: any) {
-    const stdout = (err.stdout ?? "").toString();
-    const stderr = (err.stderr ?? err.message ?? String(err)).toString();
-    return { ok: false, output: `${stdout}\n${stderr}`.trim() };
-  }
+  onLine?: (line: string) => void,
+): Promise<{ ok: boolean; output: string }> {
+  return streamProcess("uv", args, { cwd, timeoutMs, signal, onLine });
 }
 
 /** Write a file, creating parent directories as needed. */
@@ -811,46 +861,34 @@ export default function (pi: ExtensionAPI) {
 
       onUpdate?.({ content: [{ type: "text", text: "Installing prereqs & building charm..." }] });
 
-      try {
-        // Check if quickpack is available
-        if (!quickpackAvailable()) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "Error: quickpack is not installed. Install it with: `uv tool install juju-cantrip`",
-              },
-            ],
-            details: { error: "quickpack_missing" },
-          };
-        }
+      if (!quickpackAvailable()) {
+        return {
+          content: [{
+            type: "text",
+            text: "Error: quickpack is not installed. Install it with: `uv tool install juju-cantrip`",
+          }],
+          details: { error: "quickpack_missing" },
+        };
+      }
 
-        const result = runQuickpack(["pack"], absDir, {
-          timeout: 300_000, // 5 min
+      try {
+        const result = await runQuickpack(["pack"], absDir, {
+          timeoutMs: 300_000, // 5 min
           signal,
+          onLine: (line) => onUpdate?.({ content: [{ type: "text", text: line }] }),
         });
 
         if (!result.ok) {
           return {
-            content: [
-              {
-                type: "text",
-                text: `Charm build failed:\n${result.stderr}`,
-              },
-            ],
-            details: { error: "build_failed", stderr: result.stderr },
+            content: [{ type: "text", text: `Charm build failed:\n${result.output}` }],
+            details: { error: "build_failed", output: result.output },
             isError: true,
           };
         }
 
         return {
-          content: [
-            {
-              type: "text",
-              text: `Charm built successfully:\n${result.stdout}`,
-            },
-          ],
-          details: { output: result.stdout, directory: absDir },
+          content: [{ type: "text", text: `Charm built successfully:\n${result.output}` }],
+          details: { output: result.output, directory: absDir },
         };
       } catch (err: any) {
         const stderr = err.stderr || err.message || String(err);
@@ -922,7 +960,9 @@ export default function (pi: ExtensionAPI) {
         if (signal?.aborted) {
           return { content: [{ type: "text", text: "Cancelled." }], details: { error: "cancelled" } };
         }
-        const result = runUv(args, absDir, 120_000, signal);
+        const result = await runUv(args, absDir, 120_000, signal, (line) => {
+          onUpdate?.({ content: [{ type: "text", text: `${name}: ${line}` }] });
+        });
         transcript.push(`--- ${name} ---\n${result.output || "(no output)"}`);
         if (!result.ok) {
           return {
@@ -981,11 +1021,12 @@ export default function (pi: ExtensionAPI) {
 
       onUpdate?.({ content: [{ type: "text", text: "Running unit tests..." }] });
 
-      const result = runUv(
+      const result = await runUv(
         ["run", "--group", "unit", "pytest", "tests/unit", "-v", "--tb=native"],
         absDir,
         120_000,
         signal,
+        (line) => onUpdate?.({ content: [{ type: "text", text: line }] }),
       );
 
       if (!result.ok) {
@@ -1036,7 +1077,7 @@ export default function (pi: ExtensionAPI) {
 
       onUpdate?.({ content: [{ type: "text", text: "Running integration tests..." }] });
 
-      const result = runUv(
+      const result = await runUv(
         [
           "run", "--group", "integration",
           "pytest", "tests/integration", "-v", "--tb=native", "--log-cli-level=INFO",
@@ -1044,6 +1085,7 @@ export default function (pi: ExtensionAPI) {
         absDir,
         600_000,
         signal,
+        (line) => onUpdate?.({ content: [{ type: "text", text: line }] }),
       );
 
       if (!result.ok) {
