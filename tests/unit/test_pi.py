@@ -83,7 +83,7 @@ class TestPiRpcServerLifecycle:
 
         call_args = mock_popen.call_args[0][0]
         assert '--model' in call_args
-        assert 'openai/gpt-4o' in call_args
+        assert 'openrouter/openai/gpt-4o' in call_args
 
     def test_start_sets_no_model_flag_when_empty(self) -> None:
         mock_proc = MagicMock(spec=subprocess.Popen)
@@ -485,7 +485,7 @@ class TestGenerateCharm:
                 project_dir=project_dir,
             )
 
-        assert captured_model == ['gpt-4']  # from MINIMAL_CONFIG
+        assert captured_model == ['openrouter/gpt-4']  # code adds openrouter/ prefix
 
     def test_raises_runtime_error_on_server_failure(self, tmp_path: Path) -> None:
         """If the server is not running, generate_charm raises RuntimeError."""

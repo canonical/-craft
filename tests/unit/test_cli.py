@@ -72,6 +72,8 @@ class TestMain:
         assert 'my-charm' in captured.out
         assert 'Cloned upstream to:' in captured.out
         assert 'Charm generation complete' in captured.err
+        # .tmp should be cleaned up (no --keep-source)
+        assert not (project_dir / '.tmp').exists()
 
     def test_pack_fails_on_missing_config(self, capsys) -> None:
         with patch.object(sys, 'argv', ['dashcraft', '--project-dir', '/nonexistent', 'pack']):
@@ -116,11 +118,16 @@ class TestMain:
             ):
                 ret = main()
 
-        assert ret == 0
-        captured = capsys.readouterr()
-        assert 'my-charm' in captured.out
-        assert 'directory will not be cleaned up' in captured.out
-        assert 'Charm generation complete' in captured.err
+            # Check inside the context manager since make_config cleans up
+            assert ret == 0
+            captured = capsys.readouterr()
+            assert 'my-charm' in captured.out
+            assert 'will not be cleaned up' in captured.out
+            assert 'Charm generation complete' in captured.err
+            # .tmp should be preserved (--keep-source)
+            assert (project_dir / '.tmp').exists()
+            assert (project_dir / '.tmp' / 'upstream').exists()
+            assert (project_dir / '.tmp' / 'charm').exists()
 
     def test_pack_handles_generate_charm_error(self, capsys, monkeypatch) -> None:
         """generate_charm raises RuntimeError; pack returns 1."""
@@ -155,6 +162,8 @@ class TestMain:
         assert ret == 1
         captured = capsys.readouterr()
         assert 'AI charm generation failed' in captured.err
+        # .tmp should be cleaned up on error
+        assert not (project_dir / '.tmp').exists()
 
     def test_pack_without_api_key_skips_generation(self, capsys, monkeypatch) -> None:
         """When no API key is configured, pi check fails and generation is skipped."""
@@ -198,6 +207,8 @@ class TestMain:
         assert ret == 1
         captured = capsys.readouterr()
         assert 'Skipping AI charm generation' in captured.err
+        # .tmp should be cleaned up even when generation is skipped
+        assert not (project_dir / '.tmp').exists()
 
 
 class TestCheckPi:
@@ -230,3 +241,50 @@ class TestCheckPi:
             'shutil.which', lambda cmd: '/usr/local/bin/pi' if cmd == 'pi' else None
         )
         assert _check_pi_installed() == 0
+
+
+class TestEnsureCleanTmp:
+    def test_creates_new_tmp_dir(self, tmp_path: Path) -> None:
+        from dashcraft.cli import TMP_DIR_NAME, _ensure_clean_tmp
+
+        tmp_dir = tmp_path / TMP_DIR_NAME
+        _ensure_clean_tmp(tmp_dir)
+        assert tmp_dir.exists()
+        assert tmp_dir.is_dir()
+
+    def test_removes_existing_contents(self, tmp_path: Path) -> None:
+        from dashcraft.cli import TMP_DIR_NAME, _ensure_clean_tmp
+
+        tmp_dir = tmp_path / TMP_DIR_NAME
+        tmp_dir.mkdir()
+        (tmp_dir / 'old-file').write_text('stale')
+        (tmp_dir / 'old-subdir').mkdir()
+
+        _ensure_clean_tmp(tmp_dir)
+
+        assert tmp_dir.exists()
+        assert not (tmp_dir / 'old-file').exists()
+        assert not (tmp_dir / 'old-subdir').exists()
+
+
+class TestCleanupTmp:
+    def test_removes_tmp_when_keep_is_false(self, tmp_path: Path) -> None:
+        from dashcraft.cli import _cleanup_tmp
+
+        tmp_dir = tmp_path / '.tmp'
+        tmp_dir.mkdir()
+        (tmp_dir / 'stuff').write_text('data')
+
+        _cleanup_tmp(tmp_dir, keep=False)
+        assert not tmp_dir.exists()
+
+    def test_preserves_tmp_when_keep_is_true(self, tmp_path: Path, capsys) -> None:
+        from dashcraft.cli import _cleanup_tmp
+
+        tmp_dir = tmp_path / '.tmp'
+        tmp_dir.mkdir()
+
+        _cleanup_tmp(tmp_dir, keep=True)
+        assert tmp_dir.exists()
+        captured = capsys.readouterr()
+        assert 'will not be cleaned up' in captured.out

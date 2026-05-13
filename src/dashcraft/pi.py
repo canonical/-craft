@@ -116,7 +116,7 @@ class PiRpcServer:
         if self._model:
             cmd += ['--model', 'openrouter/' + self._model.removeprefix('openrouter/')]
 
-        self._proc = subprocess.Popen(
+        self._proc = subprocess.Popen(  # ty: ignore[no-matching-overload,invalid-assignment]
             cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,

@@ -15,6 +15,8 @@ from dashcraft.pi import generate_charm
 from dashcraft.templates import get_files
 from dashcraft.upstream import CloneError, clone_upstream_persistent
 
+TMP_DIR_NAME = '.tmp'
+
 
 def _pi_event_handler(event: dict[str, Any]) -> None:
     """Default on_event callback for streaming pi RPC progress to the user."""
@@ -123,73 +125,86 @@ def _cmd_pack(args: argparse.Namespace) -> int:
 
     print(f"Packing charm '{config.name}' from upstream: {charm_part.upstream}")
 
-    # Step 2: Clone upstream
+    # Step 2: Prepare .tmp working directory (sibling to dashcraft.yaml)
+    tmp_dir = project_dir / TMP_DIR_NAME
+    _ensure_clean_tmp(tmp_dir)
+    print(f'Working directory: {tmp_dir}')
+
+    # Paths inside .tmp
+    source_dir = tmp_dir / 'upstream'
+    charm_dir = tmp_dir / 'charm'
+
+    # Step 3: Clone upstream into .tmp/upstream
     try:
-        if args.keep_source:
-            source_dir = clone_upstream_persistent(charm_part.upstream)
-            print(f'Cloned upstream to: {source_dir}')
-            print('(--keep-source: directory will not be cleaned up)')
-        else:
-            source_dir = clone_upstream_persistent(charm_part.upstream)
-            print(f'Cloned upstream to: {source_dir}')
+        clone_upstream_persistent(charm_part.upstream, dest=source_dir)
+        print(f'Cloned upstream to: {source_dir}')
     except CloneError as e:
         print(f'Error: {e}', file=sys.stderr)
+        _cleanup_tmp(tmp_dir, args.keep_source)
         return 1
 
-    # Step 3: Scaffold charm files if charmcraft.yaml doesn't exist
-    if not (project_dir / 'charmcraft.yaml').exists():
-        scaffold_ret = _do_scaffold(project_dir, config.name, charm_part.workload)
-        if scaffold_ret != 0:
-            _cleanup_source(source_dir, args.keep_source)
-            return scaffold_ret
+    # Step 4: Scaffold charm files into .tmp/charm
+    scaffold_ret = _do_scaffold(charm_dir, config.name, charm_part.workload)
+    if scaffold_ret != 0:
+        _cleanup_tmp(tmp_dir, args.keep_source)
+        return scaffold_ret
 
-    # Step 4: Check if pi is available and generate charm code.
+    # Step 5: Check if pi is available and generate charm code.
     pi_check_ret = _check_pi_installed()
     if pi_check_ret != 0:
         print('Skipping AI charm generation.', file=sys.stderr)
-        _cleanup_source(source_dir, args.keep_source)
+        _cleanup_tmp(tmp_dir, args.keep_source)
         return 1
 
     print('Generating charm code via pi RPC...')
-    print(f'  Charm dir:    {project_dir}', file=sys.stderr)
+    print(f'  Charm dir:    {charm_dir}', file=sys.stderr)
     print(f'  Workload dir: {source_dir}', file=sys.stderr)
 
     try:
         gen_result = generate_charm(
             config_obj=config,
             source_dir=source_dir,
-            project_dir=project_dir,
+            project_dir=charm_dir,
             on_event=_pi_event_handler,
         )
     except RuntimeError as e:
         print(f'Error: AI charm generation failed: {e}', file=sys.stderr)
-        _cleanup_source(source_dir, args.keep_source)
+        _cleanup_tmp(tmp_dir, args.keep_source)
         return 1
 
     if not gen_result.get('success'):
         err = gen_result.get('error', 'unknown error')
         print(f'Error: Charm generation failed: {err}', file=sys.stderr)
-        _cleanup_source(source_dir, args.keep_source)
+        _cleanup_tmp(tmp_dir, args.keep_source)
         return 1
 
     print('\nCharm generation complete.', file=sys.stderr)
 
-    _cleanup_source(source_dir, args.keep_source)
+    _cleanup_tmp(tmp_dir, args.keep_source)
     return 0
 
-    # Step 5: Pack (unreachable for now — future work)
+    # Step 6: Pack (unreachable for now — future work)
     print('Packing charm...')
-    pack_ret = _run_quickpack(project_dir)
+    pack_ret = _run_quickpack(charm_dir)
 
-    _cleanup_source(source_dir, args.keep_source)
+    _cleanup_tmp(tmp_dir, args.keep_source)
 
     return pack_ret
 
 
-def _cleanup_source(source_dir: Path, keep: bool) -> None:
-    """Clean up the cloned upstream source unless --keep-source was given."""
+def _ensure_clean_tmp(tmp_dir: Path) -> None:
+    """Remove existing .tmp directory if present, then create fresh."""
+    if tmp_dir.exists():
+        shutil.rmtree(tmp_dir)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+
+
+def _cleanup_tmp(tmp_dir: Path, keep: bool) -> None:
+    """Clean up the .tmp working directory unless --keep-source was given."""
     if not keep:
-        shutil.rmtree(source_dir, ignore_errors=True)
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+    else:
+        print(f'(--keep-source: {tmp_dir} will not be cleaned up)')
 
 
 def _run_quickpack(cwd: Path) -> int:
@@ -218,7 +233,7 @@ def _find_source_pi_dir() -> Path | None:
     return Path(__file__).resolve().parent / '.pi'
 
 
-def _do_scaffold(project_dir: Path, name: str, workload_image: str = '') -> int:
+def _do_scaffold(target_dir: Path, name: str, workload_image: str = '') -> int:
     """Scaffold charm files from templates into the project directory."""
     if not _is_valid_kebab_case(name):
         print(
@@ -227,7 +242,6 @@ def _do_scaffold(project_dir: Path, name: str, workload_image: str = '') -> int:
         )
         return 1
 
-    target_dir = project_dir
     target_dir.mkdir(parents=True, exist_ok=True)
 
     files = get_files(name, workload_image)
@@ -253,7 +267,7 @@ def _do_scaffold(project_dir: Path, name: str, workload_image: str = '') -> int:
         else:
             skipped.append('.pi/')
 
-    print(f'Scaffolded charm "{name}" into {project_dir}.')
+    print(f'Scaffolded charm "{name}" into {target_dir}.')
     if created:
         print(f'Created {len(created)} files:')
         for f in created:
@@ -268,7 +282,7 @@ def _do_scaffold(project_dir: Path, name: str, workload_image: str = '') -> int:
     if uv:
         try:
             subprocess.run(
-                [uv, 'lock'], cwd=project_dir, check=True, capture_output=True, text=True
+                [uv, 'lock'], cwd=target_dir, check=True, capture_output=True, text=True
             )
             print('Created uv.lock')
         except subprocess.CalledProcessError as e:
