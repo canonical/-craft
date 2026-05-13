@@ -31,6 +31,16 @@ class TestBuildParser:
     def test_config_filename(self) -> None:
         assert CONFIG_FILENAME == 'dashcraft.yaml'
 
+    def test_keep_source_flag(self) -> None:
+        parser = _build_parser()
+        args = parser.parse_args(['pack', '--keep-source'])
+        assert args.keep_source is True
+
+    def test_keep_source_defaults_to_false(self) -> None:
+        parser = _build_parser()
+        args = parser.parse_args(['pack'])
+        assert args.keep_source is False
+
 
 class TestMain:
     def test_no_command_prints_help(self, capsys) -> None:
@@ -71,3 +81,29 @@ class TestMain:
         assert ret == 1
         captured = capsys.readouterr()
         assert 'not found' in captured.err
+
+    def test_pack_keep_source(self, capsys, monkeypatch) -> None:
+        with make_config(MINIMAL_CONFIG) as config_path:
+            project_dir = config_path.parent
+
+            def fake_git_run(args, **kwargs):
+                if args and args[0] == 'git' and 'clone' in args:
+                    return subprocess.CompletedProcess(
+                        args=args, returncode=0, stdout='', stderr=''
+                    )
+                raise AssertionError(f'unexpected command: {args}')
+
+            monkeypatch.setattr('subprocess.run', fake_git_run)
+
+            with patch.object(
+                sys,
+                'argv',
+                ['dashcraft', '--project-dir', str(project_dir), 'pack', '--keep-source'],
+            ):
+                ret = main()
+
+        assert ret == 0
+        captured = capsys.readouterr()
+        assert 'my-charm' in captured.out
+        assert 'directory will not be cleaned up' in captured.out
+        assert 'Upstream source ready' in captured.out

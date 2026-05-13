@@ -8,11 +8,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from quickpack.pack import quick_pack
-
 from dashcraft.config import ConfigError, load_config
 from dashcraft.templates import get_files
-from dashcraft.upstream import CloneError, clone_upstream
+from dashcraft.upstream import CloneError, clone_upstream, clone_upstream_persistent
+from quickpack.pack import quick_pack
 
 CONFIG_FILENAME = 'dashcraft.yaml'
 
@@ -31,7 +30,14 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest='command')
 
     # pack command
-    subparsers.add_parser('pack', help='Generate and pack a charm for the upstream workload')
+    pack_parser = subparsers.add_parser(
+        'pack', help='Generate and pack a charm for the upstream workload'
+    )
+    pack_parser.add_argument(
+        '--keep-source',
+        action='store_true',
+        help='Keep the cloned upstream source directory (do not clean up on exit)',
+    )
 
     # charm-init command
     init_parser = subparsers.add_parser(
@@ -109,14 +115,25 @@ def _cmd_pack(args: argparse.Namespace) -> int:
     print(f"Packing charm '{config.name}' from upstream: {charm_part.upstream}")
 
     try:
-        with clone_upstream(charm_part.upstream) as source_dir:
+        if args.keep_source:
+            source_dir = clone_upstream_persistent(charm_part.upstream)
             print(f'Cloned upstream to: {source_dir}')
+            print('(--keep-source: directory will not be cleaned up)')
+            # TODO: Analyze source, generate charm, pack it
             print('Upstream source ready. (Charm generation not yet implemented.)')
 
             if (args.project_dir / 'charmcraft.yaml').exists():
                 print('Found charmcraft.yaml — running quickpack...')
                 return _run_quickpack(args.project_dir)
+        else:
+            with clone_upstream(charm_part.upstream) as source_dir:
+                print(f'Cloned upstream to: {source_dir}')
+                # TODO: Analyze source, generate charm, pack it
+                print('Upstream source ready. (Charm generation not yet implemented.)')
 
+                if (args.project_dir / 'charmcraft.yaml').exists():
+                    print('Found charmcraft.yaml — running quickpack...')
+                    return _run_quickpack(args.project_dir)
     except CloneError as e:
         print(f'Error: {e}', file=sys.stderr)
         return 1
