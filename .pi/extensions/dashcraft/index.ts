@@ -1,13 +1,12 @@
 /**
- * Juju Charm Extension for pi
+ * dashcraft Extension for pi
  *
- * Provides tools and commands for building Juju charms. Starts with a basic
- * scaffold matching `charmcraft init --profile kubernetes`, then researches a
- * cloned workload to fill in charmcraft.yaml and src/charm.py appropriately.
+ * The core extension behind `dashcraft` — charming, but fast. Researches a
+ * cloned workload and generates a fully populated Juju charm on the fly.
  *
  * Features:
- *   /charm-init [name]     — scaffold a new charm interactively
- *   charm_init             — tool for the LLM: takes a charm directory + workload clone,
+ *   /dashcraft [name]      — scaffold & research a new charm interactively
+ *   dashcraft              — tool for the LLM: takes a charm directory + workload clone,
  *                            researches the workload, then writes charmcraft.yaml & src/charm.py
  *   charm_build            — run `charmcraft pack`
  *   charm_lint             — run `tox run -e lint`
@@ -37,7 +36,7 @@ import {
 } from "./templates";
 
 /** Skills shipped with this extension. */
-const SKILLS_DIR = path.resolve(__dirname, "..", "skills");
+const SKILLS_DIR = path.resolve(__dirname, "..", "..", "skills");
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -431,13 +430,13 @@ export default function (pi: ExtensionAPI) {
     };
   });
 
-  // ── /charm-init command ─────────────────────────────────────────────────
+  // ── /dashcraft command ─────────────────────────────────────────────────
 
-  pi.registerCommand("charm-init", {
-    description: "Scaffold a new Juju charm project with workload research",
+  pi.registerCommand("dashcraft", {
+    description: "Scaffold a new Juju charm with workload research (dashcraft)",
     async handler(args, ctx) {
       if (!ctx.hasUI) {
-        ctx.ui.notify("/charm-init requires interactive mode", "error");
+        ctx.ui.notify("/dashcraft requires interactive mode", "error");
         return;
       }
 
@@ -559,24 +558,24 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
-  // ── charm_init tool ────────────────────────────────────────────────────
+  // ── dashcraft tool ────────────────────────────────────────────────────
 
   pi.registerTool({
-    name: "charm_init",
-    label: "Charm Init",
+    name: "dashcraft",
+    label: "dashcraft",
     description:
-      "Initialize or update a Juju charm project. " +
+      "Initialize or update a Juju charm project — charming, but fast. " +
       "Requires a charm directory (with basic scaffolding like charmcraft.yaml) " +
       "and a path to a cloned workload. The tool researches the workload and " +
       "writes charmcraft.yaml and src/charm.py with appropriate values. " +
       "If the charm directory is empty, basic scaffolding is created first.",
-    promptSnippet: "Initialize a Juju charm project: research workload, write charmcraft.yaml & src/charm.py",
+    promptSnippet: "dashcraft: research a cloned workload and write a Juju charm (charmcraft.yaml + src/charm.py)",
     promptGuidelines: [
-      "Use charm_init when the user asks to create a new Juju charm, initialize a charm project, or scaffold a charm.",
-      "Before calling charm_init, read /skill:quick-charm-workflow to determine the appropriate charm path (custom, 12-factor, infrastructure).",
-      "charm_init needs TWO arguments: directory (path to charm project) and workload (path to cloned workload source). Both are required.",
-      "The workload should already be cloned to disk before calling charm_init. Use git clone if needed.",
-      "After charm_init writes charmcraft.yaml and src/charm.py, review them with the user.",
+      "Use dashcraft when the user asks to create a new Juju charm, initialize a charm project, or scaffold a charm.",
+      "Before calling dashcraft, read /skill:quick-charm-workflow to determine the appropriate charm path (custom, 12-factor, infrastructure).",
+      "dashcraft needs TWO arguments: directory (path to charm project) and workload (path to cloned workload source). Both are required.",
+      "The workload should already be cloned to disk before calling dashcraft. Use git clone if needed.",
+      "After dashcraft writes charmcraft.yaml and src/charm.py, review them with the user.",
       "Then load /skill:relations, /skill:operational-patterns, and /skill:observability to flesh out the charm further.",
       "After the charm is ready, use charm_build to pack it.",
     ],
@@ -696,7 +695,7 @@ export default function (pi: ExtensionAPI) {
     },
 
     renderCall(args, theme, _context) {
-      let text = theme.fg("toolTitle", theme.bold("charm_init"));
+      let text = theme.fg("toolTitle", theme.bold("dashcraft"));
       if (args.directory) text += " " + theme.fg("muted", args.directory);
       if (args.workload) text += " " + theme.fg("dim", "← " + args.workload);
       return new Text(text, 0, 0);
@@ -710,7 +709,7 @@ export default function (pi: ExtensionAPI) {
       if (details?.analysis) {
         const a = details.analysis;
         return new Text(
-          theme.fg("success", `✓ Initialized "${details.charmName ?? "?"}"`) +
+          theme.fg("success", `✓ dashcraft "${details.charmName ?? "?"}"`) +
             " · " + theme.fg("muted", `${a.language}${a.framework !== "none" ? "/" + a.framework : ""}`) +
             " · " + theme.fg("dim", `cmd: ${a.command.split(" ")[0]}`),
           0,
@@ -1058,7 +1057,7 @@ export default function (pi: ExtensionAPI) {
       msg += "4. **Review**: `/skill:quality-review` — security audit, bug hunt\n";
       msg += "5. **Debug**: `/skill:debugging` — diagnose and fix issues\n";
       msg += "\n## Tools Available\n\n";
-      msg += "- `charm_init` — initialize a charm: takes (directory, workload), researches workload, writes charmcraft.yaml & src/charm.py\n";
+      msg += "- `dashcraft` — initialize a charm: takes (directory, workload), researches workload, writes charmcraft.yaml & src/charm.py\n";
       msg += "- `charm_build` — run `charmcraft pack`\n";
       msg += "- `charm_lint` — run `tox run -e lint`\n";
       msg += "- `charm_test_unit` — run `tox run -e unit`\n";
@@ -1088,10 +1087,10 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     ctx.ui.setWidget(
-      "juju-charm",
+      "dashcraft",
       [
-        "  🪄 Juju Charm extension active",
-        "  /charm-init · charm_init(dir, workload) · charm_build · charm_lint · charm_test",
+        "  🪄 dashcraft — charming, but fast",
+        "  /dashcraft · dashcraft(dir, workload) · charm_build · charm_lint · charm_test",
         "  /skill:quick-charm-workflow · relations · charm-testing · observability · operational-patterns · quality-review · debugging",
       ],
     );
