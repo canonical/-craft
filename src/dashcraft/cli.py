@@ -129,30 +129,6 @@ def _run_quickpack(cwd: Path) -> int:
         return 0
     except (FileNotFoundError, ValueError, RuntimeError, OSError) as e:
         print(f'quickpack failed: {e}', file=sys.stderr)
-        print('Falling back to charmcraft pack...')
-        return _run_charmcraft_pack(cwd)
-
-
-def _run_charmcraft_pack(cwd: Path) -> int:
-    """Run charmcraft pack in the given directory as a fallback."""
-    charmcraft = shutil.which('charmcraft')
-    if not charmcraft:
-        print(
-            'Error: charmcraft is not installed. '
-            'Install it with: sudo snap install charmcraft --classic',
-            file=sys.stderr,
-        )
-        return 1
-
-    try:
-        subprocess.run(
-            [charmcraft, 'pack'],
-            cwd=cwd,
-            check=True,
-        )
-        return 0
-    except subprocess.CalledProcessError as e:
-        print(f'charmcraft pack failed: {e}', file=sys.stderr)
         return 1
 
 
@@ -190,6 +166,19 @@ def _do_scaffold(project_dir: Path, name: str, workload_image: str = '') -> int:
         print(f'Skipped {len(skipped)} existing files:')
         for f in skipped:
             print(f'  - {f}')
+
+    # Run uv lock to create uv.lock for the generated pyproject.toml
+    uv = shutil.which('uv')
+    if uv:
+        try:
+            subprocess.run(
+                [uv, 'lock'], cwd=project_dir, check=True, capture_output=True, text=True
+            )
+            print('Created uv.lock')
+        except subprocess.CalledProcessError as e:
+            print(f'Warning: uv lock failed: {e.stderr.strip()}', file=sys.stderr)
+    else:
+        print('Warning: uv not found — skipping uv.lock generation', file=sys.stderr)
 
     return 0
 
