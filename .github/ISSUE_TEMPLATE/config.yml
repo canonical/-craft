@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Discussions
+    url: https://github.com/canonical/-craft/discussions
+    about: Bugs / feature requests should be discussed here first.
