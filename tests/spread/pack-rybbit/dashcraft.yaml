@@ -1,0 +1,10 @@
+name: rybbit
+summary: Rybbit charm
+description: A charm for Rybbit analytics.
+type: charm
+
+parts:
+  charm:
+    plugin: -craft
+    upstream: https://github.com/rybbit-io/rybbit.git
+    workload: ghcr.io/rybbit-io/rybbit-backend:latest

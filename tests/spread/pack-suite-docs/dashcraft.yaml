@@ -1,0 +1,10 @@
+name: suite-docs
+summary: Suite Numerique Docs charm
+description: A charm for Suite Numerique Docs.
+type: charm
+
+parts:
+  charm:
+    plugin: -craft
+    upstream: https://github.com/suitenumerique/docs.git
+    workload: ghcr.io/suitenumerique/docs-backend:latest

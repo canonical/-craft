@@ -15,6 +15,7 @@ class CharmPart:
 
     plugin: str = '-craft'
     upstream: str = ''
+    workload: str = ''
     model: str = ''
     language: str = ''
 
@@ -50,6 +51,7 @@ def _parse_parts(raw_parts: dict[str, Any]) -> dict[str, CharmPart]:
         parts[name] = CharmPart(
             plugin=attrs.get('plugin', '-craft'),
             upstream=attrs.get('upstream', ''),
+            workload=attrs.get('workload', ''),
             model=attrs.get('model', ''),
             language=attrs.get('language', ''),
         )

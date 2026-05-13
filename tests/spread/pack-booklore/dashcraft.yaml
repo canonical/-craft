@@ -1,0 +1,10 @@
+name: booklore
+summary: Booklore charm
+description: A charm for Booklore.
+type: charm
+
+parts:
+  charm:
+    plugin: -craft
+    upstream: https://github.com/booklore-app/booklore.git
+    workload: ghcr.io/booklore-app/booklore:latest

@@ -1,0 +1,11 @@
+name: simplomon
+summary: Simplomon charm
+description: A charm for Simplomon monitoring.
+type: charm
+
+parts:
+  charm:
+    plugin: -craft
+    upstream: https://codeberg.org/berthubert/simplomon.git
+    # TODO: confirm upstream image ref — simplomon ships primarily as a binary.
+    workload: docker.io/berthubert/simplomon:latest

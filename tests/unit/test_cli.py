@@ -27,12 +27,12 @@ class TestBuildParser:
 
     def test_keep_source_flag(self) -> None:
         parser = _build_parser()
-        args = parser.parse_args(['--keep-source'])
+        args = parser.parse_args(['pack', '--keep-source'])
         assert args.keep_source is True
 
     def test_keep_source_defaults_to_false(self) -> None:
         parser = _build_parser()
-        args = parser.parse_args([])
+        args = parser.parse_args(['pack'])
         assert args.keep_source is False
 
 
@@ -55,7 +55,9 @@ class TestMain:
             )
             monkeypatch.setattr('quickpack.pack.quick_pack', lambda cwd: Path('result.charm'))
 
-            with patch.object(sys, 'argv', ['dashcraft', '--project-dir', str(project_dir)]):
+            with patch.object(
+                sys, 'argv', ['dashcraft', '--project-dir', str(project_dir), 'pack']
+            ):
                 ret = main()
 
         assert ret == 0
@@ -67,7 +69,7 @@ class TestMain:
         assert 'Running unit tests' in captured.out
 
     def test_pack_fails_on_missing_config(self, capsys) -> None:
-        with patch.object(sys, 'argv', ['dashcraft', '--project-dir', '/nonexistent']):
+        with patch.object(sys, 'argv', ['dashcraft', '--project-dir', '/nonexistent', 'pack']):
             ret = main()
 
         assert ret == 1
@@ -95,7 +97,7 @@ class TestMain:
             with patch.object(
                 sys,
                 'argv',
-                ['dashcraft', '--project-dir', str(project_dir), '--keep-source'],
+                ['dashcraft', '--project-dir', str(project_dir), 'pack', '--keep-source'],
             ):
                 ret = main()
 

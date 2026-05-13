@@ -1,0 +1,10 @@
+name: ironcalc
+summary: IronCalc charm
+description: A charm for IronCalc.
+type: charm
+
+parts:
+  charm:
+    plugin: -craft
+    upstream: https://github.com/ironcalc/IronCalc.git
+    workload: ghcr.io/ironcalc/ironcalc:latest

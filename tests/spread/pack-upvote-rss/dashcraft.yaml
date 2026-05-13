@@ -1,0 +1,10 @@
+name: upvote-rss
+summary: upvote-rss charm
+description: A charm for upvote-rss.
+type: charm
+
+parts:
+  charm:
+    plugin: -craft
+    upstream: https://github.com/johnwarne/upvote-rss.git
+    workload: ghcr.io/johnwarne/upvote-rss:latest

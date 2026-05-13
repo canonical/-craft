@@ -27,7 +27,13 @@ def _build_parser() -> argparse.ArgumentParser:
         default=Path.cwd(),
         help='Project directory containing dashcraft.yaml (default: CWD)',
     )
-    parser.add_argument(
+    subparsers = parser.add_subparsers(dest='command')
+
+    # pack — the only command
+    pack_parser = subparsers.add_parser(
+        'pack', help='Generate and pack a charm for the upstream workload'
+    )
+    pack_parser.add_argument(
         '--keep-source',
         action='store_true',
         help='Keep the cloned upstream source directory (do not clean up on exit)',
@@ -40,6 +46,11 @@ def main() -> int:
     """Entry point for the dashcraft CLI."""
     parser = _build_parser()
     args = parser.parse_args()
+
+    if args.command != 'pack':
+        parser.print_help()
+        return 1
+
     return _cmd_pack(args)
 
 
@@ -78,7 +89,7 @@ def _cmd_pack(args: argparse.Namespace) -> int:
 
     # Step 3: Scaffold charm files if charmcraft.yaml doesn't exist
     if not (project_dir / 'charmcraft.yaml').exists():
-        scaffold_ret = _do_scaffold(project_dir, config.name)
+        scaffold_ret = _do_scaffold(project_dir, config.name, charm_part.workload)
         if scaffold_ret != 0:
             _cleanup_source(source_dir, args.keep_source)
             return scaffold_ret
@@ -145,7 +156,7 @@ def _run_charmcraft_pack(cwd: Path) -> int:
         return 1
 
 
-def _do_scaffold(project_dir: Path, name: str) -> int:
+def _do_scaffold(project_dir: Path, name: str, workload_image: str = '') -> int:
     """Scaffold charm files from templates into the project directory."""
     if not _is_valid_kebab_case(name):
         print(
@@ -157,7 +168,7 @@ def _do_scaffold(project_dir: Path, name: str) -> int:
     target_dir = project_dir
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    files = get_files(name)
+    files = get_files(name, workload_image)
     created: list[str] = []
     skipped: list[str] = []
 
