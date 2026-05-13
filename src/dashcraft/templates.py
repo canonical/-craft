@@ -2,6 +2,21 @@
 
 from __future__ import annotations
 
+from dashcraft.analysis import WorkloadAnalysis
+
+# Config-option keys that should be exposed through a relation rather than
+# a charm config option (e.g. DATABASE_URL comes from the postgresql_client
+# relation, not a free-form config string).
+_RELATION_ENV_KEYS = {
+    'database-url',
+    'db-url',
+    'redis-url',
+    'redis-host',
+    'postgres-url',
+    'datasource-url',
+    'mysql-url',
+}
+
 
 def _to_class_name(name: str) -> str:
     """Convert kebab-case to PascalCase + Charm suffix."""
@@ -486,3 +501,283 @@ def get_files(
         'tests/integration/conftest.py': _integration_conftest(),
         'tests/integration/test_charm.py': _integration_test_charm(name),
     }
+
+
+# ── Filled templates (from workload analysis) ─────────────────────────────
+
+
+def filled_charmcraft_yaml(name: str, analysis: WorkloadAnalysis) -> str:
+    """Render charmcraft.yaml populated from a workload analysis."""
+    title = _to_title(name)
+    parts: list[str] = []
+    parts.append('# This file configures Charmcraft.')
+    parts.append(
+        '# See https://documentation.ubuntu.com/charmcraft/stable/reference/files/charmcraft-yaml-file/'
+    )
+    parts.append('type: charm')
+    parts.append(f'name: {name}')
+    parts.append(f'title: {title} Charm')
+    parts.append(f'summary: {analysis.summary or "Charm for " + title}')
+    parts.append('description: |')
+    description = analysis.description or f'A Juju charm for deploying and operating {title}.'
+    parts.extend(f'  {line}' for line in description.split('\n'))
+    parts.append('')
+    parts.append('base: ubuntu@24.04')
+    parts.append('platforms:')
+    parts.append('  amd64:')
+    parts.append('  arm64:')
+    parts.append('')
+    parts.append('assumes:')
+    parts.append('  - juju >= 3.6')
+    parts.append('  - k8s-api')
+    parts.append('')
+    parts.append('parts:')
+    parts.append('  charm:')
+    parts.append('    plugin: uv')
+    parts.append('    source: .')
+    parts.append('    build-snaps:')
+    parts.append('      - astral-uv')
+    parts.append('')
+
+    # ── Config ───────────────────────────────────────────────────────
+    parts.append('config:')
+    parts.append('  options:')
+    parts.append('    log-level:')
+    parts.append('      description: |')
+    parts.append('        Configures the log level of the workload.')
+    parts.append(
+        '        Acceptable values are: "debug", "info", "warning", "error" and "critical"'
+    )
+    parts.append('      default: "info"')
+    parts.append('      type: string')
+    if analysis.port:
+        parts.append('    port:')
+        parts.append('      description: The port the workload listens on.')
+        parts.append(f'      default: {analysis.port}')
+        parts.append('      type: int')
+    for key, val in analysis.env_vars.items():
+        config_key = key.lower().replace('_', '-')
+        if config_key in _RELATION_ENV_KEYS:
+            continue
+        parts.append(f'    {config_key}:')
+        parts.append(f'      description: Sets the {key} environment variable.')
+        # Escape any double quotes in the default value
+        safe_val = val.replace('\\', '\\\\').replace('"', '\\"')
+        parts.append(f'      default: "{safe_val}"')
+        parts.append('      type: string')
+    parts.append('')
+
+    # ── Relations ────────────────────────────────────────────────────
+    parts.append('provides:')
+    parts.append('  metrics-endpoint:')
+    parts.append('    interface: prometheus_scrape')
+    parts.append('  grafana-dashboard:')
+    parts.append('    interface: grafana_dashboard')
+    if analysis.is_web_app:
+        parts.append('  ingress:')
+        parts.append('    interface: ingress')
+    parts.append('')
+    parts.append('requires:')
+    parts.append('  tracing:')
+    parts.append('    interface: tracing')
+    parts.append('    limit: 1')
+    parts.append('    optional: true')
+    parts.append('  logging:')
+    parts.append('    interface: loki_push_api')
+    parts.append('    optional: true')
+    if analysis.needs_database or analysis.has_postgres:
+        parts.append('  database:')
+        parts.append('    interface: postgresql_client')
+        parts.append('    optional: true')
+        parts.append('    limit: 1')
+    parts.append('')
+
+    # ── Actions ──────────────────────────────────────────────────────
+    parts.append('actions:')
+    parts.append('  health-check:')
+    parts.append('    description: Run a comprehensive health check on the workload.')
+    parts.append('  collect-diagnostics:')
+    parts.append('    description: Collect diagnostic information about the deployment.')
+    parts.append('')
+
+    # ── Containers & resources ───────────────────────────────────────
+    parts.append('containers:')
+    parts.append('  workload:')
+    parts.append('    resource: workload-image')
+    parts.append('')
+    parts.append('resources:')
+    parts.append('  workload-image:')
+    parts.append('    type: oci-image')
+    parts.append('    description: OCI image for the workload container')
+    parts.append(f'    upstream-source: {analysis.name}:latest  # TODO: confirm image tag')
+    parts.append('')
+
+    return '\n'.join(parts)
+
+
+def filled_src_charm_py(name: str, analysis: WorkloadAnalysis) -> str:
+    """Render src/charm.py populated from a workload analysis."""
+    class_name = _to_class_name(name)
+    module_name = _to_module_name(name)
+    title = _to_title(name)
+    env_present = bool(analysis.env_vars)
+    safe_command = analysis.command.replace('\\', '\\\\').replace('"', '\\"')
+
+    lines: list[str] = [
+        '#!/usr/bin/env python3',
+        '# Copyright 2026 Ubuntu',
+        '# See LICENSE file for licensing details.',
+        '',
+        f'"""Charm for {title}."""',
+        '',
+        'import logging',
+        'import time',
+        '',
+        'import ops',
+        '',
+        f'import {module_name}',
+        '',
+        'logger = logging.getLogger(__name__)',
+        '',
+        'SERVICE_NAME = "workload"',
+        'CHECK_NAME = "service-ready"',
+        '',
+        '',
+        f'class {class_name}(ops.CharmBase):',
+        f'    """Charm for {title}."""',
+        '',
+        '    def __init__(self, framework: ops.Framework):',
+        '        super().__init__(framework)',
+        '        framework.observe(self.on["workload"].pebble_ready, self._on_pebble_ready)',
+        '        self.container = self.unit.get_container("workload")',
+    ]
+    if analysis.needs_database:
+        lines.append(
+            '        framework.observe(self.on.database_relation_changed, self._on_database_changed)'
+        )
+    if analysis.is_web_app:
+        lines.append(
+            '        framework.observe(self.on.ingress_relation_joined, self._on_ingress_joined)'
+        )
+    lines += [
+        '',
+        '    def _on_pebble_ready(self, event: ops.PebbleReadyEvent) -> None:',
+        '        """Handle pebble-ready event."""',
+        '        self.unit.status = ops.MaintenanceStatus("starting workload")',
+    ]
+    if env_present:
+        lines.append('        env = {')
+        for key, val in analysis.env_vars.items():
+            config_key = key.lower().replace('_', '-')
+            safe_val = val.replace('\\', '\\\\').replace('"', '\\"')
+            lines.append(f'            "{key}": self.config.get("{config_key}", "{safe_val}"),')
+        lines.append('        }')
+
+    lines += [
+        '        layer: ops.pebble.LayerDict = {',
+        '            "services": {',
+        '                SERVICE_NAME: {',
+        '                    "override": "replace",',
+        f'                    "summary": "{title} service",',
+        f'                    "command": "{safe_command}",',
+        '                    "startup": "enabled",',
+    ]
+    if env_present:
+        lines.append('                    "environment": env,')
+    lines += [
+        '                },',
+        '            },',
+    ]
+    if analysis.port:
+        lines += [
+            '            "checks": {',
+            '                CHECK_NAME: {',
+            '                    "override": "replace",',
+            '                    "level": "ready",',
+            '                    "http": {',
+            f'                        "url": "http://localhost:{analysis.port}",',
+            '                    },',
+            '                },',
+            '            },',
+        ]
+    lines += [
+        '        }',
+        '        self.container.add_layer("workload", layer, combine=True)',
+        '        self.container.replan()',
+        '        self.wait_for_ready()',
+        f'        version = {module_name}.get_version()',
+        '        if version is not None:',
+        '            self.unit.set_workload_version(version)',
+        '        self.unit.status = ops.ActiveStatus()',
+        '',
+    ]
+
+    if analysis.needs_database:
+        lines += [
+            '    def _on_database_changed(self, event: ops.RelationChangedEvent) -> None:',
+            '        """Handle database relation changes."""',
+            '        if not event.relation.data.get(event.app):',
+            '            return',
+            '        # TODO: configure workload with database credentials',
+            '',
+        ]
+
+    if analysis.is_web_app:
+        # Split the inner config lookup out so the f-string has no nested
+        # double quotes — keeps it valid on Python < 3.12.
+        lines += [
+            '    def _on_ingress_joined(self, event: ops.RelationJoinedEvent) -> None:',
+            '        """Handle ingress relation."""',
+            '        if not self.unit.is_leader():',
+            '            return',
+            f'        port = self.config.get("port", {analysis.port or 8080})',
+            '        event.relation.data[self.app]["url"] = f"http://{self.app.name}:{port}"',
+            '',
+        ]
+
+    lines += [
+        '    def is_ready(self) -> bool:',
+        '        """Check whether the workload is ready to use."""',
+        '        for name, service_info in self.container.get_services().items():',
+        '            if not service_info.is_running():',
+        '                logger.info(',
+        '                    "the workload is not ready (service \'%s\' is not running)", name',
+        '                )',
+        '                return False',
+        '        checks = self.container.get_checks(level=ops.pebble.CheckLevel.READY)',
+        '        for check_info in checks.values():',
+        '            if check_info.status != ops.pebble.CheckStatus.UP:',
+        '                return False',
+        '        return True',
+        '',
+        '    def wait_for_ready(self) -> None:',
+        '        """Wait for the workload to be ready to use."""',
+        '        for _ in range(3):',
+        '            if self.is_ready():',
+        '                return',
+        '            time.sleep(1)',
+        '        logger.error("the workload was not ready within the expected time")',
+        '        raise RuntimeError("workload is not ready")',
+        '',
+        '',
+        'if __name__ == "__main__":  # pragma: nocover',
+        f'    ops.main({class_name})',
+        '',
+    ]
+
+    return '\n'.join(lines)
+
+
+def get_filled_files(
+    name: str, analysis: WorkloadAnalysis, workload_image: str = ''
+) -> dict[str, str]:
+    """Return path -> content with charmcraft.yaml and src/charm.py filled from analysis."""
+    files = get_files(
+        name,
+        workload_image=workload_image,
+        summary=analysis.summary,
+        description=analysis.description,
+    )
+    files['charmcraft.yaml'] = filled_charmcraft_yaml(name, analysis)
+    files['src/charm.py'] = filled_src_charm_py(name, analysis)
+    return files

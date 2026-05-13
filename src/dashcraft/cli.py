@@ -12,9 +12,10 @@ from typing import Any
 
 import yaml
 
+from dashcraft.analysis import WorkloadAnalysis, analyse_workload
 from dashcraft.config import ConfigError, load_config
 from dashcraft.pi import generate_charm
-from dashcraft.templates import get_files
+from dashcraft.templates import get_files, get_filled_files
 from dashcraft.upstream import CloneError, clone_upstream_persistent
 
 TMP_DIR_NAME = '.tmp'
@@ -145,9 +146,21 @@ def _cmd_pack(args: argparse.Namespace) -> int:
         _cleanup_tmp(tmp_dir, args.keep_source)
         return 1
 
-    # Step 4: Scaffold charm files into .tmp/charm
+    # Step 4a: Research the cloned workload deterministically so we can
+    # pre-fill charmcraft.yaml and src/charm.py. Running this Python-side
+    # (rather than as the agent's first tool call) saves a full LLM
+    # round-trip per pack.
+    analysis = analyse_workload(source_dir, config.name)
+    _print_analysis_summary(analysis)
+
+    # Step 4b: Scaffold charm files into .tmp/charm (filled from analysis).
     scaffold_ret = _do_scaffold(
-        charm_dir, config.name, charm_part.workload, config.summary, config.description
+        charm_dir,
+        config.name,
+        charm_part.workload,
+        config.summary,
+        config.description,
+        analysis=analysis,
     )
     if scaffold_ret != 0:
         _cleanup_tmp(tmp_dir, args.keep_source)
@@ -207,6 +220,22 @@ def _cmd_pack(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_analysis_summary(analysis: WorkloadAnalysis) -> None:
+    """Print a one-line workload-analysis summary to stderr."""
+    bits = [f'name={analysis.name}', f'language={analysis.language}']
+    if analysis.framework != 'none':
+        bits.append(f'framework={analysis.framework}')
+    if analysis.command:
+        bits.append(f'command={analysis.command!r}')
+    if analysis.port:
+        bits.append(f'port={analysis.port}')
+    if analysis.is_web_app:
+        bits.append('web-app=yes')
+    if analysis.needs_database:
+        bits.append('database=yes')
+    print('Workload analysis: ' + ' '.join(bits), file=sys.stderr)
+
+
 def _ensure_clean_tmp(tmp_dir: Path) -> None:
     """Remove existing .tmp directory if present, then create fresh."""
     if tmp_dir.exists():
@@ -254,8 +283,13 @@ def _do_scaffold(
     workload_image: str = '',
     summary: str = '',
     description: str = '',
+    analysis: WorkloadAnalysis | None = None,
 ) -> int:
-    """Scaffold charm files from templates into the project directory."""
+    """Scaffold charm files from templates into the project directory.
+
+    When *analysis* is provided, ``charmcraft.yaml`` and ``src/charm.py`` are
+    filled from it; otherwise the skeleton (TODO-laden) versions are used.
+    """
     if not _is_valid_kebab_case(name):
         print(
             f'Error: Invalid charm name "{name}". Use kebab-case (e.g. "my-app").',
@@ -265,7 +299,10 @@ def _do_scaffold(
 
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    files = get_files(name, workload_image, summary, description)
+    if analysis is not None:
+        files = get_filled_files(name, analysis, workload_image=workload_image)
+    else:
+        files = get_files(name, workload_image, summary, description)
     created: list[str] = []
     skipped: list[str] = []
 
