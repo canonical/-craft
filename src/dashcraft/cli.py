@@ -191,11 +191,13 @@ def _cmd_pack(args: argparse.Namespace) -> int:
         _cleanup_tmp(tmp_dir, args.keep_source)
         return pack_ret
 
-    # Step 7: Print deploy command
+    # Step 7: Move packed charm beside dashcraft.yaml, then print deploy hint
     charm_file = _find_charm_file(charm_dir)
     if charm_file:
-        deploy_cmd = _build_deploy_command(charm_dir, charm_file, project_dir)
-        print(f'\nCharm packed successfully: {charm_file.name}')
+        dest_charm = project_dir / charm_file.name
+        shutil.move(str(charm_file), str(dest_charm))
+        print(f'\nPacked charm saved to: {dest_charm}')
+        deploy_cmd = _build_deploy_command(charm_dir, dest_charm, project_dir)
         print(f'Deploy with:\n  {deploy_cmd}')
     else:
         print('\nWarning: No .charm file found after packing.', file=sys.stderr)
