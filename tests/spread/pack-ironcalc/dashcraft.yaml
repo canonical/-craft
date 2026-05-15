@@ -7,4 +7,7 @@ parts:
   charm:
     plugin: -craft
     upstream: https://github.com/ironcalc/IronCalc.git
-    workload: ghcr.io/ironcalc/ironcalc:latest
+    # IronCalc ships two images (server + caddy front). The server image
+    # is what the charm wraps; caddy is a separate deployment concern.
+    # No `latest` is published — pin to a known-good release.
+    workload: ghcr.io/ironcalc/ironcalc-server:0.7.1

@@ -14,13 +14,13 @@ from __future__ import annotations
 import contextlib
 import json
 import subprocess
-import sys
 import time
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
 from dashcraft.analysis import WorkloadAnalysis
+from dashcraft.config import Config
 
 # ---------------------------------------------------------------------------
 # Low-level subprocess manager
@@ -328,13 +328,19 @@ class PiRpcServer:
 _DEFAULT_MODEL = 'gemini/gemini-2.5-flash'
 
 
-def _default_model_for_config(config_obj: Any) -> str:
+def _default_model_for_config(config_obj: Config) -> str:
     """Return the model to use, falling back to a sensible default.
 
     Args:
         config_obj: A :class:`~.Config` loaded from ``dashcraft.yaml``.
             When ``config_obj.charm_part.model`` is non-empty that
             value is used; otherwise falls back to :data:`_DEFAULT_MODEL`.
+
+    Note:
+        Whatever provider prefix the user supplies (``gemini/``,
+        ``anthropic/``, etc.) is preserved here. The OpenRouter prefix
+        in :meth:`PiRpcServer.start` is layered on top so that pi routes
+        every model through OpenRouter as the gateway.
     """
     charm_part = config_obj.charm_part
     if charm_part and charm_part.model:
@@ -464,7 +470,7 @@ def _resolve_extension_path(project_dir: Path) -> Path | None:
 
 def generate_charm(
     *,
-    config_obj: Any,
+    config_obj: Config,
     source_dir: Path,
     project_dir: Path,
     analysis: WorkloadAnalysis | None = None,
@@ -580,19 +586,3 @@ def generate_charm(
 
     finally:
         server.shutdown()
-
-
-# ---------------------------------------------------------------------------
-# CLI convenience (allows ``python -m dashcraft.pi`` for quick testing)
-# ---------------------------------------------------------------------------
-
-if __name__ == '__main__':
-    print('Testing pi RPC server startup...', file=sys.stderr)
-    try:
-        with PiRpcServer() as srv:
-            print(f'pi pid={srv._proc.pid if srv._proc else "?"}', file=sys.stderr)
-            resp = srv.send({'type': 'get_state', 'id': 'test'})
-            print('response:', json.dumps(resp, indent=2))
-    except Exception as exc:
-        print(f'ERROR: {exc}', file=sys.stderr)
-        sys.exit(1)

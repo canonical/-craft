@@ -7,4 +7,8 @@ parts:
   charm:
     plugin: -craft
     upstream: https://github.com/suitenumerique/docs.git
-    workload: ghcr.io/suitenumerique/docs-backend:latest
+    # Upstream's Helm chart (src/helm/impress/values.yaml) points at the
+    # `lasuite/impress-backend` and `lasuite/impress-frontend` Docker Hub
+    # images. There are no semver tags published — only `latest`, `main`,
+    # PR builds, and signed-digest tags. Charm wraps the backend.
+    workload: docker.io/lasuite/impress-backend:latest

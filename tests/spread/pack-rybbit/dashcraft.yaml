@@ -7,4 +7,4 @@ parts:
   charm:
     plugin: -craft
     upstream: https://github.com/rybbit-io/rybbit.git
-    workload: ghcr.io/rybbit-io/rybbit-backend:latest
+    workload: ghcr.io/rybbit-io/rybbit-backend:v1.4.0

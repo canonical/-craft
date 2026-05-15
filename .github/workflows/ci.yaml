@@ -54,8 +54,18 @@ jobs:
       - name: Run unit tests
         run: make unit
 
-  define-matrix:
-    name: Define spread matrix
+  # ---------------------------------------------------------------------
+  # Spread matrix is split into two tracks:
+  #   - pack-*  & dashcraft-* & pack-clone-*: run end-to-end pack but stop
+  #     at unzip-and-verify. Cheap-ish, but they invoke pi → require an
+  #     API key (OPENROUTER_API_KEY) so the matrix only runs when the
+  #     secret is configured.
+  #   - deploy-*: pack + deploy onto concierge-microk8s and wait for
+  #     active. Slow; gated behind a label or manual dispatch.
+  # ---------------------------------------------------------------------
+
+  define-pack-matrix:
+    name: Define pack-test matrix
     runs-on: ubuntu-latest
     outputs:
       suites: ${{ steps.suites.outputs.suites }}
@@ -66,20 +76,15 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: stable
-
-      - name: Install spread
-        run: go install github.com/canonical/spread/cmd/spread@latest
-
-      - name: Generate matrix list
+      - name: List pack suites
         id: suites
         run: |
-          list="$(spread -list github-ci 2>/dev/null | sed "s|github-ci:ubuntu-24.04:tests/||g" | jq -r -ncR '[inputs | select(length>0)]')"
+          # All non-"deploy-" task dirs are pack-style tests.
+          list="$(find tests/spread -mindepth 1 -maxdepth 1 -type d \
+                   ! -name 'deploy-*' \
+                   -exec test -f '{}/task.yaml' ';' -printf '%f\n' \
+                 | jq -r -ncR '[inputs | select(length>0)]')"
           if [[ -z "$list" || "$list" == "[]" ]]; then
-            echo "No spread suites defined."
             echo "empty=true" >> "$GITHUB_OUTPUT"
             echo "suites=[]" >> "$GITHUB_OUTPUT"
           else
@@ -87,16 +92,23 @@ jobs:
             echo "suites=$list" >> "$GITHUB_OUTPUT"
           fi
 
-  spread-test:
-    name: Spread (${{ matrix.suite }})
+  pack-spread:
+    name: Spread pack (${{ matrix.suite }})
     runs-on: ubuntu-24.04
     needs:
-      - define-matrix
-    if: needs.define-matrix.outputs.empty == 'false'
+      - define-pack-matrix
+    # Only attempt these when the OpenRouter key is configured. Forks/PRs
+    # without secrets get a no-op.
+    if: |
+      needs.define-pack-matrix.outputs.empty == 'false'
+      && (
+        vars.HAS_OPENROUTER_KEY == 'true'
+        || github.repository_owner == 'juju'
+      )
     strategy:
       fail-fast: false
       matrix:
-        suite: ${{ fromJSON(needs.define-matrix.outputs.suites) }}
+        suite: ${{ fromJSON(needs.define-pack-matrix.outputs.suites) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -112,7 +124,49 @@ jobs:
       - name: Install spread
         run: go install github.com/canonical/spread/cmd/spread@latest
 
-      - name: Run integration tests
+      - name: Run pack suite
         env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           SUITE: ${{ matrix.suite }}
-        run: spread -v "github-ci:ubuntu-24.04:tests/${SUITE}"
+        run: spread -v "github-ci:ubuntu-24.04:tests/spread/${SUITE}"
+
+  deploy-spread:
+    name: Spread deploy (${{ matrix.suite }})
+    runs-on: ubuntu-24.04
+    # Slow + flaky-prone. Gate behind a label so PRs don't pay for it by
+    # default; main-branch pushes still exercise it.
+    if: |
+      (
+        github.event_name == 'push'
+        || contains(github.event.pull_request.labels.*.name, 'run-deploy-tests')
+      )
+      && (
+        vars.HAS_OPENROUTER_KEY == 'true'
+        || github.repository_owner == 'juju'
+      )
+    strategy:
+      fail-fast: false
+      matrix:
+        suite:
+          - deploy-upvote-rss
+          - deploy-booklore
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          architecture: amd64
+
+      - name: Install spread
+        run: go install github.com/canonical/spread/cmd/spread@latest
+
+      - name: Run deploy suite
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SUITE: ${{ matrix.suite }}
+        run: spread -v "github-ci:ubuntu-24.04:tests/spread/${SUITE}"

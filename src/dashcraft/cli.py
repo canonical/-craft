@@ -13,12 +13,26 @@ from typing import Any
 import yaml
 
 from dashcraft.analysis import WorkloadAnalysis, analyse_workload
-from dashcraft.config import ConfigError, load_config
+from dashcraft.config import Config, ConfigError, load_config
 from dashcraft.pi import generate_charm
 from dashcraft.templates import get_files, get_filled_files
 from dashcraft.upstream import CloneError, clone_upstream_persistent
 
-TMP_DIR_NAME = '.tmp'
+TMP_DIR_NAME = '.dashcraft-tmp'
+
+# Environment variables that pi recognises as model-provider API keys. The
+# CLI accepts any one of these as "configured."
+KNOWN_API_KEYS = (
+    'ANTHROPIC_API_KEY',
+    'OPENAI_API_KEY',
+    'GEMINI_API_KEY',
+    'AZURE_OPENAI_API_KEY',
+    'DEEPSEEK_API_KEY',
+    'GROQ_API_KEY',
+    'MISTRAL_API_KEY',
+    'OPENROUTER_API_KEY',
+    'FIREWORKS_API_KEY',
+)
 
 
 def _pi_event_handler(event: dict[str, Any]) -> None:
@@ -51,19 +65,17 @@ def _pi_event_handler(event: dict[str, Any]) -> None:
     elif etype == 'tool_execution_update':
         for block in event.get('partialResult', {}).get('content', []):
             if block.get('type') == 'text' and block.get('text', '').strip():
-                # Only show non-empty tool progress
-                text = block['text'].strip()
-                lines = text.split('\n')
-                # Show just the last line for brevity
-                last_line = lines[-1][:120]
-                if last_line:
-                    print(f'    {last_line}', file=sys.stderr)
+                for line in block['text'].rstrip().splitlines():
+                    if line.strip():
+                        print(f'    {line}', file=sys.stderr)
 
     elif etype == 'message_update':
         delta = event.get('assistantMessageEvent', {})
         if delta.get('type') == 'text_delta':
-            sys.stdout.write(delta['delta'])
-            sys.stdout.flush()
+            # Assistant text is part of user-facing output; keep on stderr
+            # to leave stdout for the packed-charm path and deploy hint.
+            sys.stderr.write(delta['delta'])
+            sys.stderr.flush()
 
     elif etype == 'agent_end':
         print('\n  [pi] Agent finished.', file=sys.stderr)
@@ -105,16 +117,21 @@ def main() -> int:
     parser = _build_parser(prog)
     args = parser.parse_args()
 
-    if args.command != 'pack':
+    if args.command is None:
+        # No subcommand given — show help. argparse convention: exit 0.
         parser.print_help()
-        return 1
+        return 0
+
+    if args.command != 'pack':  # pragma: no cover — argparse should reject
+        parser.print_help()
+        return 2
 
     return _cmd_pack(args)
 
 
 def _cmd_pack(args: argparse.Namespace) -> int:
     """Execute the 'pack' command — scaffold and pack."""
-    project_dir = args.project_dir
+    project_dir: Path = args.project_dir
 
     # Step 1: Load config
     try:
@@ -128,32 +145,41 @@ def _cmd_pack(args: argparse.Namespace) -> int:
 
     print(f"Packing charm '{config.name}' from upstream: {charm_part.upstream}")
 
-    # Step 2: Prepare .tmp working directory (sibling to dashcraft.yaml)
+    # Step 2: Prepare working directory (sibling to dashcraft.yaml)
     tmp_dir = project_dir / TMP_DIR_NAME
     _ensure_clean_tmp(tmp_dir)
     print(f'Working directory: {tmp_dir}')
 
-    # Paths inside .tmp
+    try:
+        return _run_pack(project_dir, tmp_dir, config)
+    finally:
+        _cleanup_tmp(tmp_dir, args.keep_source)
+
+
+def _run_pack(project_dir: Path, tmp_dir: Path, config: Config) -> int:
+    """Run the pack pipeline. Cleanup is handled by the caller."""
+    charm_part = config.charm_part
+    assert charm_part is not None
+
     source_dir = tmp_dir / 'upstream'
     charm_dir = tmp_dir / 'charm'
 
-    # Step 3: Clone upstream into .tmp/upstream
+    # Clone upstream
     try:
         clone_upstream_persistent(charm_part.upstream, dest=source_dir)
         print(f'Cloned upstream to: {source_dir}')
     except CloneError as e:
         print(f'Error: {e}', file=sys.stderr)
-        _cleanup_tmp(tmp_dir, args.keep_source)
         return 1
+    print(f'Upstream source ready at: {source_dir}')
 
-    # Step 4a: Research the cloned workload deterministically so we can
-    # pre-fill charmcraft.yaml and src/charm.py. Running this Python-side
-    # (rather than as the agent's first tool call) saves a full LLM
-    # round-trip per pack.
+    # Research the cloned workload deterministically so we can pre-fill
+    # charmcraft.yaml and src/charm.py. Running this Python-side (rather
+    # than as the agent's first tool call) saves a full LLM round-trip.
     analysis = analyse_workload(source_dir, config.name)
     _print_analysis_summary(analysis)
 
-    # Step 4b: Scaffold charm files into .tmp/charm (filled from analysis).
+    # Scaffold charm files (filled from analysis).
     scaffold_ret = _do_scaffold(
         charm_dir,
         config.name,
@@ -163,14 +189,12 @@ def _cmd_pack(args: argparse.Namespace) -> int:
         analysis=analysis,
     )
     if scaffold_ret != 0:
-        _cleanup_tmp(tmp_dir, args.keep_source)
         return scaffold_ret
 
-    # Step 5: Check if pi is available and generate charm code.
+    # Check if pi is available and generate charm code.
     pi_check_ret = _check_pi_installed()
     if pi_check_ret != 0:
         print('Skipping AI charm generation.', file=sys.stderr)
-        _cleanup_tmp(tmp_dir, args.keep_source)
         return 1
 
     print('Generating charm code via pi RPC...')
@@ -187,25 +211,22 @@ def _cmd_pack(args: argparse.Namespace) -> int:
         )
     except RuntimeError as e:
         print(f'Error: AI charm generation failed: {e}', file=sys.stderr)
-        _cleanup_tmp(tmp_dir, args.keep_source)
         return 1
 
     if not gen_result.get('success'):
         err = gen_result.get('error', 'unknown error')
         print(f'Error: Charm generation failed: {err}', file=sys.stderr)
-        _cleanup_tmp(tmp_dir, args.keep_source)
         return 1
 
     print('\nCharm generation complete.', file=sys.stderr)
 
-    # Step 6: Pack
+    # Pack
     print('Packing charm...')
     pack_ret = _run_quickpack(charm_dir)
     if pack_ret != 0:
-        _cleanup_tmp(tmp_dir, args.keep_source)
         return pack_ret
 
-    # Step 7: Move packed charm beside dashcraft.yaml, then print deploy hint
+    # Move packed charm beside dashcraft.yaml, then print deploy hint
     charm_file = _find_charm_file(charm_dir)
     if charm_file:
         dest_charm = project_dir / charm_file.name
@@ -215,8 +236,6 @@ def _cmd_pack(args: argparse.Namespace) -> int:
         print(f'Deploy with:\n  {deploy_cmd}')
     else:
         print('\nWarning: No .charm file found after packing.', file=sys.stderr)
-
-    _cleanup_tmp(tmp_dir, args.keep_source)
 
     return 0
 
@@ -238,14 +257,14 @@ def _print_analysis_summary(analysis: WorkloadAnalysis) -> None:
 
 
 def _ensure_clean_tmp(tmp_dir: Path) -> None:
-    """Remove existing .tmp directory if present, then create fresh."""
+    """Remove existing dashcraft tmp directory if present, then create fresh."""
     if tmp_dir.exists():
         shutil.rmtree(tmp_dir)
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
 
 def _cleanup_tmp(tmp_dir: Path, keep: bool) -> None:
-    """Clean up the .tmp working directory unless --keep-source was given."""
+    """Clean up the working directory unless --keep-source was given."""
     if not keep:
         shutil.rmtree(tmp_dir, ignore_errors=True)
     else:
@@ -336,18 +355,23 @@ def _do_scaffold(
         for f in skipped:
             print(f'  - {f}')
 
-    # Run uv lock to create uv.lock for the generated pyproject.toml
+    # Run uv lock to create uv.lock for the generated pyproject.toml. The
+    # downstream charmcraft uv-plugin needs this file at build time, so
+    # treat its absence as fatal rather than a soft warning.
     uv = shutil.which('uv')
-    if uv:
-        try:
-            subprocess.run(
-                [uv, 'lock'], cwd=target_dir, check=True, capture_output=True, text=True
-            )
-            print('Created uv.lock')
-        except subprocess.CalledProcessError as e:
-            print(f'Warning: uv lock failed: {e.stderr.strip()}', file=sys.stderr)
-    else:
-        print('Warning: uv not found — skipping uv.lock generation', file=sys.stderr)
+    if not uv:
+        print(
+            "Error: 'uv' is required to generate the charm's uv.lock. "
+            'Install it from https://astral.sh/uv/install.sh',
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        subprocess.run([uv, 'lock'], cwd=target_dir, check=True, capture_output=True, text=True)
+        print('Created uv.lock')
+    except subprocess.CalledProcessError as e:
+        print(f'Error: uv lock failed: {e.stderr.strip()}', file=sys.stderr)
+        return e.returncode or 1
 
     return 0
 
@@ -399,19 +423,7 @@ def _check_pi_installed() -> int:
         )
         return 1
 
-    # Check for at least one known API key env var
-    known_keys = {
-        'ANTHROPIC_API_KEY',
-        'OPENAI_API_KEY',
-        'GEMINI_API_KEY',
-        'AZURE_OPENAI_API_KEY',
-        'DEEPSEEK_API_KEY',
-        'GROQ_API_KEY',
-        'MISTRAL_API_KEY',
-        'OPENROUTER_API_KEY',
-        'FIREWORKS_API_KEY',
-    }
-    if not any(os.environ.get(k) for k in known_keys):
+    if not any(os.environ.get(k) for k in KNOWN_API_KEYS):
         print('Error: No API key found for pi.', file=sys.stderr)
         print(
             'Set one of the supported API key environment variables, e.g.:\n'

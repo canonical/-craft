@@ -62,9 +62,8 @@ def _license() -> str:
 
 
 def _readme(name: str) -> str:
-    _to_title(name)
     return (
-        f'# {name}\n'
+        f'# {_to_title(name)}\n'
         '\n'
         f'Charmhub package name: {name}\n'
         f'More information: https://charmhub.io/{name}\n'
@@ -469,7 +468,7 @@ def _integration_test_charm(name: str) -> str:
         'METADATA = yaml.safe_load(pathlib.Path("charmcraft.yaml").read_text())\n'
         '\n'
         '\n'
-        f'def test_deploy(charm: pathlib.Path, juju: jubilant.Juju):\n'
+        'def test_deploy(charm: pathlib.Path, juju: jubilant.Juju):\n'
         '    """Deploy the charm under test."""\n'
         '    resources = {\n'
         '        "workload-image": METADATA["resources"]["workload-image"].get("upstream-source", "")\n'

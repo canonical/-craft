@@ -40,10 +40,10 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 # Four demos, each on a different OpenRouter-routed provider.
 #   name | openrouter-model | upstream git url | oci workload image
 DEMOS=(
-    "upvote-rss|qwen/qwen3.6-max-preview|https://github.com/johnwarne/upvote-rss.git|ghcr.io/johnwarne/upvote-rss:latest"
-    "suite-docs|google/gemma-4-31b-it|https://github.com/suitenumerique/docs.git|ghcr.io/suitenumerique/docs-backend:latest"
-    "booklore|deepseek/deepseek-v4-pro|https://github.com/booklore-app/booklore.git|ghcr.io/booklore-app/booklore:latest"
-    "ironcalc|moonshotai/kimi-latest|https://github.com/ironcalc/IronCalc.git|ghcr.io/ironcalc/ironcalc:latest"
+    "upvote-rss|qwen/qwen3.6-max-preview|https://github.com/johnwarne/upvote-rss.git|ghcr.io/johnwarne/upvote-rss:v1.8.1"
+    "suite-docs|google/gemma-4-31b-it|https://github.com/suitenumerique/docs.git|docker.io/lasuite/impress-backend:latest"
+    "booklore|deepseek/deepseek-v4-pro|https://github.com/booklore-app/booklore.git|ghcr.io/booklore-app/booklore:v0.37.0"
+    "ironcalc|moonshotai/kimi-latest|https://github.com/ironcalc/IronCalc.git|ghcr.io/ironcalc/ironcalc-server:0.7.1"
 )
 
 SESSION="${DASHCRAFT_DEMO_SESSION:-dashcraft-demo}"

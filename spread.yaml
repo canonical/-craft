@@ -4,6 +4,13 @@ workers: 1
 
 environment:
   CI: "$(HOST: echo $CI)"
+  # API keys for pi — forwarded from the host so spread tests can run
+  # `dashcraft pack` end-to-end. Set at least one of these in the calling
+  # environment (e.g. via GitHub Actions secrets) before running spread.
+  OPENROUTER_API_KEY: "$(HOST: echo ${OPENROUTER_API_KEY:-})"
+  ANTHROPIC_API_KEY: "$(HOST: echo ${ANTHROPIC_API_KEY:-})"
+  GEMINI_API_KEY: "$(HOST: echo ${GEMINI_API_KEY:-})"
+  OPENAI_API_KEY: "$(HOST: echo ${OPENAI_API_KEY:-})"
 
 backends:
   lxd:

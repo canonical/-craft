@@ -3,34 +3,23 @@ systems:
   - ubuntu-24.04
 
 execute: |
-  local work_dir="/root/work-clone-smoke"
-  rm -rf "$work_dir"
-  mkdir -p "$work_dir"
-  cp "$SPREAD_PATH/tests/spread/pack-clone-smoke/dashcraft.yaml" "$work_dir/dashcraft.yaml"
+  source "$SPREAD_PATH/tests/spread/charm-helpers.sh"
 
+  work_dir="$(task_workdir)"
+  expected_name="$(yaml_get "$work_dir/dashcraft.yaml" name)"
+
+  # Run pack and assert the user-facing progress messages.
   OUTPUT="$(dashcraft pack --project-dir "$work_dir" 2>&1)"
   echo "$OUTPUT"
 
-  echo "$OUTPUT" | MATCH "Packing charm 'clone-smoke'"
+  echo "$OUTPUT" | MATCH "Packing charm '${expected_name}'"
   echo "$OUTPUT" | MATCH "Cloned upstream to:"
   echo "$OUTPUT" | MATCH "Upstream source ready"
 
-  local charm_file
   charm_file="$(ls -1 "$work_dir"/*.charm 2>/dev/null | head -n1)"
   [[ -n "$charm_file" ]] || { echo "FAIL: no .charm produced" >&2; exit 1; }
   echo "Packed: $charm_file"
 
-  local verify_dir="$work_dir/verify"
-  mkdir -p "$verify_dir"
-  unzip -q "$charm_file" -d "$verify_dir"
-
-  for f in metadata.yaml src/charm.py; do
-    if [[ ! -f "$verify_dir/$f" ]]; then
-      echo "FAIL: $f not found in charm" >&2
-      rm -rf "$work_dir"
-      exit 1
-    fi
-  done
-  echo "Charm verification passed"
+  verify_charm "$charm_file" "$work_dir/verify" "$expected_name"
 
   rm -rf "$work_dir"

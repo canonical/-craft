@@ -1,31 +1,13 @@
-summary: Pack a Colibri.social charm and verify contents
+summary: Pack a Colibri.social charm (source-only — no upstream image)
 systems:
   - ubuntu-24.04
 
+# Note: colibri-social has no published OCI image yet (NEEDS-ROCKCRAFT in
+# dashcraft.yaml). This suite only validates that the pack pipeline
+# produces a structurally-valid charm; there is no matching deploy suite
+# until we either publish an image or teach dashcraft to drive
+# rockcraft.
+
 execute: |
-  local work_dir="/root/work-colibri-social"
-  rm -rf "$work_dir"
-  mkdir -p "$work_dir"
-  cp "$SPREAD_PATH/tests/spread/pack-colibri-social/dashcraft.yaml" "$work_dir/dashcraft.yaml"
-
-  dashcraft pack --project-dir "$work_dir"
-
-  local charm_file
-  charm_file="$(ls -1 "$work_dir"/*.charm 2>/dev/null | head -n1)"
-  [[ -n "$charm_file" ]] || { echo "FAIL: no .charm produced" >&2; exit 1; }
-  echo "Packed: $charm_file"
-
-  local verify_dir="$work_dir/verify"
-  mkdir -p "$verify_dir"
-  unzip -q "$charm_file" -d "$verify_dir"
-
-  for f in metadata.yaml src/charm.py; do
-    if [[ ! -f "$verify_dir/$f" ]]; then
-      echo "FAIL: $f not found in charm" >&2
-      rm -rf "$work_dir"
-      exit 1
-    fi
-  done
-  echo "Charm verification passed"
-
-  rm -rf "$work_dir"
+  source "$SPREAD_PATH/tests/spread/charm-helpers.sh"
+  pack_and_verify

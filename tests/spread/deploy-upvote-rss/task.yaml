@@ -1,0 +1,15 @@
+summary: Pack the upvote-rss charm and deploy it via concierge-microk8s
+systems:
+  - ubuntu-24.04
+
+# This suite requires the concierge-microk8s controller (set up by
+# spread.yaml's prepare step) and a working pi API key in the host
+# environment.
+
+execute: |
+  source "$SPREAD_PATH/tests/spread/charm-helpers.sh"
+  pack_and_deploy
+
+restore: |
+  source "$SPREAD_PATH/tests/spread/charm-helpers.sh"
+  cleanup

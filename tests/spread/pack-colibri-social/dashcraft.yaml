@@ -7,4 +7,10 @@ parts:
   charm:
     plugin: -craft
     upstream: https://github.com/colibri-social/colibri.social.git
-    workload: ghcr.io/colibri-social/colibri:latest
+    # NEEDS-ROCKCRAFT: colibri-social has no published OCI image. Upstream
+    # README instructs users to build locally (pnpm docker:dev). Either
+    # build and publish an image (e.g. via rockcraft) or teach dashcraft
+    # to drive rockcraft for source-only workloads. Until then this
+    # spread test runs the pack pipeline only — it does NOT attempt to
+    # deploy.
+    workload: ''

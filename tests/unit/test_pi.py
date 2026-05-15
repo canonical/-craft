@@ -137,6 +137,7 @@ class TestPiRpcServerLifecycle:
     def test_shutdown_when_process_already_exited(self) -> None:
         mock_proc = MagicMock(spec=subprocess.Popen)
         mock_proc.poll.return_value = 0  # already exited.
+        mock_proc.stdin = MagicMock()
         mock_proc.stdout = MagicMock()
         mock_proc.stderr = MagicMock()
 
@@ -144,8 +145,8 @@ class TestPiRpcServerLifecycle:
         srv._proc = mock_proc
         srv.shutdown()
 
-        # Should not try to write to stdin.
-        mock_proc.stdin = None  # type: ignore[assignment]
+        # Already-exited process: no abort write, no wait().
+        mock_proc.stdin.write.assert_not_called()
         mock_proc.wait.assert_not_called()
 
 
@@ -579,12 +580,25 @@ class TestGenerateCharm:
         mock_proc.stdout = io.StringIO(json.dumps(prompt_resp) + '\n')
         mock_proc.stderr = io.StringIO('')
 
-        # poll() returns None while send() reads the prompt response,
-        # then returns 0 so events() stops yielding (no more data).
-        # Needs many calls because send(), events(), and shutdown()
-        # all call poll().
-        poll_calls = iter([None, None, None, 0, 0, 0, 0, 0, 0, 0, 0, 0])
-        mock_proc.poll.side_effect = lambda: next(poll_calls, 0)
+        # poll() returns None until the prompt response has been read,
+        # then 0 so events() stops yielding. Tracked by a counter so any
+        # internal change to how often poll() is called still works.
+        state = {'reads': 0}
+
+        def _poll() -> int | None:
+            # Keep "alive" while send() reads the prompt response; after the
+            # buffer is drained, report the process as exited.
+            return None if state['reads'] < 3 else 0
+
+        original_readline = mock_proc.stdout.readline
+
+        def _readline(size: int = -1, /) -> str:
+            del size
+            state['reads'] += 1
+            return original_readline()
+
+        mock_proc.poll.side_effect = _poll
+        mock_proc.stdout.readline = _readline  # ty: ignore[invalid-assignment]
 
         with make_config(MINIMAL_CONFIG) as cfg_path:
             config = load_config(cfg_path)

@@ -20,7 +20,6 @@ from dashcraft.analysis import (
 
 class TestParseDockerfile:
     def test_expose_single_port(self):
-        _, _, _ = _parse_dockerfile('FROM alpine\nEXPOSE 8080\n')
         ports, _, _ = _parse_dockerfile('FROM alpine\nEXPOSE 8080\n')
         assert ports == [8080]
 

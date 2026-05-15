@@ -7,5 +7,7 @@ parts:
   charm:
     plugin: -craft
     upstream: https://codeberg.org/berthubert/simplomon.git
-    # TODO: confirm upstream image ref — simplomon ships primarily as a binary.
+    # Upstream `berthubert/simplomon:latest` exists on Docker Hub but is
+    # stale (last push 2024-08-03) and amd64-only. There is no semver tag.
+    # If multi-arch / fresher builds are needed, build via rockcraft.
     workload: docker.io/berthubert/simplomon:latest

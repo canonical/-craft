@@ -1,45 +1,20 @@
-"""Clone upstream workload source code into a temporary directory."""
+"""Clone upstream workload source code into a target directory."""
 
 from __future__ import annotations
 
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Generator
-from contextlib import contextmanager
 from pathlib import Path
-
-
-@contextmanager
-def clone_upstream(upstream_url: str, *, depth: int = 1) -> Generator[Path]:
-    """Clone an upstream git repository into a temporary directory.
-
-    The temporary directory is cleaned up when the context manager exits.
-
-    Args:
-        upstream_url: Git URL of the upstream repository to clone.
-        depth: Git clone depth (default 1 for shallow clone).
-
-    Yields:
-        Path to the cloned repository root.
-
-    Raises:
-        CloneError: If the git clone operation fails.
-    """
-    tmp_dir = Path(tempfile.mkdtemp(prefix='dashcraft-upstream-'))
-    try:
-        _git_clone(upstream_url, tmp_dir, depth=depth)
-        yield tmp_dir
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 def clone_upstream_persistent(
     upstream_url: str, *, dest: Path | str | None = None, depth: int = 1
 ) -> Path:
-    """Clone an upstream git repository into a persistent directory.
+    """Clone an upstream git repository into a directory.
 
-    Unlike clone_upstream(), the directory is NOT cleaned up automatically.
+    The cloned directory is NOT cleaned up automatically — the caller
+    owns it.
 
     Args:
         upstream_url: Git URL of the upstream repository to clone.

@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from dashcraft.upstream import CloneError, _ensure_git_available, _git_clone, clone_upstream
+from dashcraft.upstream import (
+    CloneError,
+    _ensure_git_available,
+    _git_clone,
+    clone_upstream_persistent,
+)
 
 from . import helpers
 
@@ -64,38 +69,29 @@ class TestGitClone:
         assert 'Failed to clone' in str(exc_info.value)
 
 
-class TestCloneUpstream:
-    def test_cleans_up_temp_dir_on_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Even when clone fails, the temp dir should be removed."""
-        sp = helpers.SubprocessMock()
-        sp.set_side_effect(
-            subprocess.CalledProcessError(1, ['git', 'clone'], output='', stderr='fail')
-        )
-        monkeypatch.setattr('subprocess.run', sp)
-
-        with pytest.raises(CloneError), clone_upstream('https://example.com'):
-            pass  # pragma: no cover — clone fails before entering
-
-    def test_cleans_up_temp_dir_on_success(
-        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+class TestCloneUpstreamPersistent:
+    def test_writes_to_supplied_dest(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Temp dir is removed after the context manager exits normally."""
-        # Create a known temp dir to return from mkdtemp
-        known_dir = tmp_path / 'fake-temp'
-        known_dir.mkdir()
-        monkeypatch.setattr('tempfile.mkdtemp', lambda prefix='': str(known_dir))
+        dest = tmp_path / 'clone-here'
+        sp = helpers.SubprocessMock()
+        sp.handle(['git', 'clone', '--depth', '1', 'https://example.com', str(dest)])
+        monkeypatch.setattr('subprocess.run', sp)
+        out = clone_upstream_persistent('https://example.com', dest=dest)
+        assert out == dest
+        assert dest.exists()  # caller owns it; not removed
 
-        # Make git clone succeed for any call targeting our known dir
-        def fake_run(args, **kwargs) -> subprocess.CompletedProcess[str]:
-            assert 'git' in args[0]
+    def test_creates_temp_dir_when_dest_omitted(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        known = tmp_path / 'auto-temp'
+        known.mkdir()
+        monkeypatch.setattr('tempfile.mkdtemp', lambda prefix='': str(known))
+
+        def fake_run(args: list[str], **_kw: object) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess(args=args, returncode=0, stdout='', stderr='')
 
         monkeypatch.setattr('subprocess.run', fake_run)
-
-        with clone_upstream('https://example.com') as source_dir:
-            assert source_dir == known_dir
-            # Dir still exists inside context
-            assert known_dir.exists()
-
-        # After exit, shutil.rmtree should have removed it
-        assert not known_dir.exists()
+        out = clone_upstream_persistent('https://example.com')
+        assert out == known
+        assert known.exists()  # caller owns it
